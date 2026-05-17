@@ -1,0 +1,10 @@
+{
+  "name": "BizzRank AI v10",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+  "forwardPorts": [3000, 5173],
+  "portsAttributes": {
+    "3000": { "label": "API", "onAutoForward": "silent" },
+    "5173": { "label": "BizzRank App", "onAutoForward": "openBrowser" }
+  },
+  "postStartCommand": "bash /workspaces/bizzrank/bizzrank-v10/start.sh"
+}

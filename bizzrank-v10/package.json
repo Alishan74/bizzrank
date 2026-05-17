@@ -1,0 +1,11 @@
+{
+  "name": "bizzrank-v10",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail \"npm run dev:api\" \"npm run dev:frontend\"",
+    "dev:api": "cd apps/api && npm run dev",
+    "dev:frontend": "cd apps/frontend && npm run dev"
+  },
+  "devDependencies": { "concurrently": "^8.2.2" }
+}
