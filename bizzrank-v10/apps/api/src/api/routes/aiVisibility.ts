@@ -8,6 +8,7 @@
 import { Router } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
 import { aiVisibilityService } from '../../domains/aivisibility/AIVisibilityService.js';
+import { aiCitationService, getCriticalSourcesForSector } from '../../domains/aivisibility/AICitationService.js';
 import { billingService, CREDIT_COSTS } from '../../domains/billing/BillingService.js';
 import { db } from '../../infrastructure/database/SupabaseClient.js';
 
@@ -83,6 +84,28 @@ router.post('/check', requireAuth, async (req: AuthRequest, res) => {
 
   aiVisibilityService.runManualCheck(businessId, req.userId!)
     .catch(e => console.error('[AIVisibility] Manual check failed:', e.message));
+});
+
+// GET /api/ai-visibility/citations?businessId=
+// Returns the latest citation intelligence report for a business
+router.get('/citations', requireAuth, async (req: AuthRequest, res) => {
+  const { businessId } = req.query;
+  if (!businessId) return res.status(400).json({ error: 'businessId required' });
+  try {
+    const report = await aiCitationService.getLatestReport(businessId as string, req.userId!);
+    if (!report) return res.json({ report: null, configured: true });
+    res.json({ report });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/ai-visibility/citation-sources?sector=
+// Returns all citation sources for a sector (for the setup guide)
+router.get('/citation-sources', requireAuth, async (req: AuthRequest, res) => {
+  const { sector = 'general' } = req.query;
+  const sources = getCriticalSourcesForSector(sector as string);
+  res.json({ sources });
 });
 
 export default router;
