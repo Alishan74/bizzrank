@@ -7,5 +7,7 @@
     "dev:api": "cd apps/api && npm run dev",
     "dev:frontend": "cd apps/frontend && npm run dev"
   },
-  "devDependencies": { "concurrently": "^8.2.2" }
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
 }

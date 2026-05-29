@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { organicApi, subscribeScanProgress } from '../lib/api';
 import { useAuth } from '../store/auth';
 import { StateBadge, Skeleton, SmallGrid, GridPointModal } from '../components/Shared';
+import HeatmapMap from '../components/HeatmapMap';
 
 export default function OrganicScanDetailPage() {
   const { scanId } = useParams();
@@ -16,7 +17,7 @@ export default function OrganicScanDetailPage() {
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['organic-scan', scanId],
-    queryFn: () => organicApi.get(scanId!).then(r => r.data),
+    queryFn: () => organicApi.get(scanId!).then(r => r.data),  // returns { scan, score, rankings }
     refetchInterval: false,
   });
 
@@ -107,7 +108,19 @@ export default function OrganicScanDetailPage() {
                       <div key={l as string} className="bg-gray-50 rounded-xl p-3"><p className="text-xs text-gray-400 mb-1">{l}</p><p className={'text-lg font-bold ' + c}>{v}</p></div>
                     ))}
                   </div>
-                  <SmallGrid heatmapPoints={clientHeatmap} onCellClick={setSelectedPoint} />
+                  {/* Real Google Maps with ranked markers */}
+                  <HeatmapMap
+                    points={clientHeatmap}
+                    businessName={scan.businesses?.name ?? 'Your Business'}
+                    keyword={scan.keyword}
+                    centerLat={scan.scan_points?.[0]?.lat}
+                    centerLng={scan.scan_points?.[0]?.lng}
+                  />
+                  {/* Grid view below map for quick scanning */}
+                  <div className="mt-4">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Quick grid view</p>
+                    <SmallGrid heatmapPoints={clientHeatmap} onCellClick={setSelectedPoint} />
+                  </div>
                 </div>
                 {competitorScores.map((comp: any) => (
                   <div key={comp.placeId} className="border-t border-gray-100 pt-6">
@@ -126,9 +139,33 @@ export default function OrganicScanDetailPage() {
               </>
             )}
             {tab === 'sponsored' && (
-              <div>
-                <p className="text-sm text-gray-600 mb-4">Sponsored results tracked in Ad Insights sessions via SerpApi for 100% accurate detection.</p>
-                <button onClick={() => nav('/ad-insights/new')} className="btn-primary">Start Ad Insights Session</button>
+              <div className="space-y-4">
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+                  <p className="text-sm text-orange-700 font-semibold mb-1">Ad Pressure at scan time</p>
+                  <p className="text-xs text-orange-600">Sponsored results were collected from the same API call as organic rankings — zero extra cost.</p>
+                </div>
+                {(score?.competitor_scores ?? []).length > 0 ? (
+                  <div>
+                    <p className="text-sm font-semibold text-gray-700 mb-3">Advertisers detected in your scan area:</p>
+                    {(data as any)?.rankings?.filter((r: any) => r.result_type === 'sponsored')
+                      .reduce((acc: any[], r: any) => {
+                        if (!acc.find(a => a.found_place_id === r.found_place_id)) acc.push(r);
+                        return acc;
+                      }, []).slice(0, 10).map((r: any) => (
+                        <div key={r.found_place_id ?? r.found_business_name} className="flex items-center gap-3 p-3 bg-orange-50 rounded-xl mb-2">
+                          <span className="w-6 h-6 bg-orange-100 rounded-lg flex items-center justify-center text-xs font-bold text-orange-700">#{r.rank_position}</span>
+                          <div><p className="text-sm font-semibold">{r.found_business_name ?? 'Unknown'}</p><p className="text-xs text-gray-400">{r.location_name}</p></div>
+                        </div>
+                      ))
+                    }
+                    <button onClick={() => nav('/ad-insights/new')} className="btn-secondary text-sm mt-3">Run detailed ad session →</button>
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <p className="text-gray-400 mb-3">No sponsored results detected in this scan area</p>
+                    <button onClick={() => nav('/ad-insights/new')} className="btn-secondary text-sm">Run ad pressure session →</button>
+                  </div>
+                )}
               </div>
             )}
           </div>

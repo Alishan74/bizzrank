@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { supabase } from '../../infrastructure/database/SupabaseClient.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
-import { generateScanSchedule, getTodayHours } from '../lib/geo.js';
-import { scheduleAdScanSlots } from '../lib/scheduler.js';
+import { geoService } from '../../domains/geo/GeoService.js';
+import { enqueueAdSlot } from '../../infrastructure/queue/QueueRegistry.js';
 import { getAddressAutocomplete, getPlaceDetails } from '../../domains/identity/GoogleMapsService.js';
 
 const router = Router();
@@ -72,11 +72,11 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const firstBiz = businesses[0];
   let todayHours = openingHoursOverride
     ? { open: openingHoursOverride.open, close: openingHoursOverride.close }
-    : getTodayHours(firstBiz.opening_hours);
+    : geoService.getTodayHours(firstBiz.opening_hours);
 
   if (!todayHours) todayHours = { open: '09:00', close: '18:00' };
 
-  const scheduledTimes = generateScanSchedule(todayHours.open, todayHours.close, 90);
+  const scheduledTimes = geoService.generateScanSchedule(todayHours.open, todayHours.close, 60);
 
   // Filter out times that have already passed
   const now = new Date();
@@ -109,7 +109,7 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
     input_addresses: (!isMulti && method === 'addresses') ? inputAddresses : null,
     input_zip_codes: (!isMulti && method === 'zip_codes') ? inputZipCodes : null,
     business_ids: businessIds,
-    interval_minutes: 90,
+    interval_minutes: 60,
     scheduled_times: validTimes,
     timezone: firstBiz.timezone ?? 'UTC',
     state: 'scheduled',
@@ -144,10 +144,24 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
     }
   }
 
-  await supabase.from('ad_scan_slots').insert(slotRows);
+  // Insert slots first — DB assigns real UUIDs
+  const { data: insertedSlots } = await supabase.from('ad_scan_slots').insert(slotRows).select('id, business_id, slot_index, slot_time');
 
-  // Schedule jobs in database — survives restarts
-  await scheduleAdScanSlots(session.id, req.userId!, validTimes, businessIds);
+  // Enqueue using real DB-assigned IDs (not in-memory stubs)
+  for (const slot of (insertedSlots ?? [])) {
+    const [_h, _m] = slot.slot_time.split(':').map(Number);
+    const _slotTime = new Date();
+    _slotTime.setHours(_h, _m, 0, 0);
+    const _delayMs = Math.max(0, _slotTime.getTime() - Date.now());
+    await enqueueAdSlot({
+      slotId: slot.id,
+      sessionId: session.id, userId: req.userId, businessId: slot.business_id,
+      keyword, radiusKm: radius, gridSize: gSize,
+      targetingMethod: method,
+      inputAddresses: (!isMulti && method === 'addresses') ? inputAddresses : null,
+      inputZipCodes: (!isMulti && method === 'zip_codes') ? inputZipCodes : null,
+    }, _delayMs);
+  }
 
   // Update session state to running
   await supabase.from('ad_scan_sessions').update({ state: 'running' }).eq('id', session.id);

@@ -115,3 +115,32 @@ export function subscribeScanProgress(
   es.onerror = () => { es.close(); onComplete(); };
   return () => es.close();
 }
+
+export const customScanApi = {
+  list:              ()        => api.get('/custom-scans'),
+  get:               (id: string) => api.get('/custom-scans/' + id),
+  create:            (d: any)  => api.post('/custom-scans', d),
+  addressAutocomplete: (q: string) => api.get('/custom-scans/address-autocomplete?q=' + encodeURIComponent(q)),
+  addressDetails:    (id: string)  => api.get('/custom-scans/address-details/' + id),
+};
+
+export const intelApi = {
+  status:  (businessId: string) => api.get('/intelligence/status?businessId=' + businessId),
+  signals: (businessId: string, limit = 20) => api.get('/intelligence/signals?businessId=' + businessId + '&limit=' + limit),
+};
+
+export const gbpGuardApi = {
+  summary:      (businessId: string) => api.get('/gbp-guard/summary?businessId=' + businessId),
+  alerts:       (businessId: string, includeRead = false) =>
+                  api.get('/gbp-guard/alerts?businessId=' + businessId + '&includeRead=' + includeRead),
+  markRead:     (alertIds: string[]) => api.post('/gbp-guard/mark-read', { alertIds }),
+  markAllRead:  (businessId: string) => api.post('/gbp-guard/mark-all-read', { businessId }),
+  history:      (entityId: string, limit = 30) =>
+                  api.get('/gbp-guard/history?entityId=' + entityId + '&limit=' + limit),
+};
+
+export const aiVisibilityApi = {
+  status:    (businessId: string) => api.get('/ai-visibility/status?businessId=' + businessId),
+  platforms: ()                   => api.get('/ai-visibility/platforms'),
+  check:     (businessId: string) => api.post('/ai-visibility/check', { businessId }),
+};

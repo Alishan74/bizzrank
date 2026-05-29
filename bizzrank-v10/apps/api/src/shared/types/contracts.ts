@@ -1,10 +1,11 @@
 // ============================================================
 // BizzRank AI v10 — Shared Domain Contracts
-// All domain interfaces defined here.
-// Domains communicate ONLY through these types.
+// UPDATED: isAutomated on ScanJob, intel level types, keyword types
 // ============================================================
 
 // ─── IDENTITY ────────────────────────────────────────────────
+export type PlanName = 'starter' | 'growth' | 'pro' | 'agency' | 'enterprise';
+
 export interface UserProfile {
   id: string;
   email: string;
@@ -20,8 +21,6 @@ export interface UserProfile {
   gbpRefreshToken: string | null;
   createdAt: string;
 }
-
-export type PlanName = 'starter' | 'professional' | 'agency' | 'enterprise';
 
 // ─── GEO ─────────────────────────────────────────────────────
 export interface ScanPoint {
@@ -70,6 +69,7 @@ export interface SerpReview {
 // ─── SCANNING ────────────────────────────────────────────────
 export type ScanState = 'pending' | 'running' | 'completed' | 'failed';
 export type TargetingMethod = 'auto_grid' | 'addresses' | 'zip_codes';
+export type IntelLevel = 1 | 2 | 3;
 
 export interface ScanJob {
   scanId: string;
@@ -80,6 +80,11 @@ export interface ScanJob {
   keyword: string;
   points: ScanPoint[];
   radiusKm: number;
+  // NEW: true = weekly automated scan (WEEKLY_SCAN TTL, fixed credits)
+  //      false = manual user-triggered scan (MANUAL_SCAN TTL, user credits)
+  isAutomated?: boolean;
+  // NEW: which intelligence level triggered this scan
+  intelLevel?: IntelLevel;
 }
 
 export interface HeatmapPoint {
@@ -104,6 +109,17 @@ export interface GridScore {
   rankedCells: number;
   totalCells: number;
   heatmapPoints: HeatmapPoint[];
+}
+
+// ─── KEYWORDS ────────────────────────────────────────────────
+export interface BusinessKeyword {
+  id: string;
+  userId: string;
+  businessId: string;
+  keyword: string;
+  displayOrder: number;
+  isActive: boolean;
+  createdAt: string;
 }
 
 // ─── AD PRESSURE ─────────────────────────────────────────────
@@ -144,7 +160,26 @@ export interface CreditDeduction {
   userId: string;
   amount: number;
   reason: string;
-  transactionType: 'usage' | 'refund' | 'purchase';
+  transactionType: 'usage' | 'refund' | 'purchase' | 'fixed_scan' | 'monthly_reset';
+}
+
+// ─── INTELLIGENCE ─────────────────────────────────────────────
+export type SignalType =
+  | 'RankingDelta'
+  | 'VisibilityDelta'
+  | 'CompetitorDelta'
+  | 'ReviewDelta'
+  | 'AdPressureDelta';
+
+export interface IntelSignal {
+  id: string;
+  businessId: string;
+  userId: string;
+  signalType: SignalType;
+  value: number;
+  direction: 'up' | 'down' | 'spike';
+  triggersL2: boolean;
+  detectedAt: string;
 }
 
 // ─── DOMAIN EVENTS ───────────────────────────────────────────

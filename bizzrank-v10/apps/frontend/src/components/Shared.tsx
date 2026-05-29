@@ -351,17 +351,35 @@ export function AddCompModal({ businessId, bizName, onClose, onAdded }: any) {
 }
 
 export function AddBizModal({ onClose, onAdded }: any) {
+  const [step, setStep] = useState<'search' | 'keyword'>('search');
   const [q, setQ] = useState('');
   const [sugs, setSugs] = useState<any[]>([]);
   const [selected, setSel] = useState<any>(null);
+  const [keyword, setKeyword] = useState('');
   const [loading, setLoad] = useState(false);
   const [saving, setSave] = useState(false);
   const [err, setErr] = useState('');
   const ref = useRef<any>(null);
 
+  function suggestKeyword(cat: string): string {
+    const c = (cat ?? '').toLowerCase();
+    if (c.includes('restaurant') || c.includes('food') || c.includes('diner') || c.includes('cafe')) return 'best restaurant near me';
+    if (c.includes('plumb')) return 'emergency plumber near me';
+    if (c.includes('electric')) return 'electrician near me';
+    if (c.includes('dental') || c.includes('dentist')) return 'dentist near me';
+    if (c.includes('salon') || c.includes('hair') || c.includes('barber')) return 'hair salon near me';
+    if (c.includes('gym') || c.includes('fitness')) return 'gym near me';
+    if (c.includes('lawyer') || c.includes('attorney')) return 'lawyer near me';
+    if (c.includes('hotel') || c.includes('motel')) return 'hotel near me';
+    if (c.includes('car') || c.includes('auto') || c.includes('mechanic')) return 'auto repair near me';
+    if (c.includes('medical') || c.includes('clinic') || c.includes('doctor')) return 'doctor near me';
+    if (c.includes('clean')) return 'cleaning service near me';
+    const first = c.split(' ')[0].replace(/[^a-z]/g, '');
+    return first ? first + ' near me' : 'local business near me';
+  }
+
   function onInput(v: string) {
-    setQ(v);
-    setSel(null);
+    setQ(v); setSel(null);
     if (ref.current) clearTimeout(ref.current);
     if (v.length < 2) return setSugs([]);
     ref.current = setTimeout(async () => {
@@ -373,66 +391,106 @@ export function AddBizModal({ onClose, onAdded }: any) {
   }
 
   async function pick(s: any) {
-    setSugs([]);
-    setQ(s.description);
+    setSugs([]); setQ(s.description);
     setLoad(true);
     const r = await bizApi.placeDetails(s.placeId);
     setSel(r.data);
     setLoad(false);
+    if (r.data?.category) setKeyword(suggestKeyword(r.data.category));
+    setStep('keyword');
   }
 
   async function save() {
     if (!selected) return;
-    setSave(true);
-    setErr('');
+    if (!keyword.trim()) { setErr('Please enter a core keyword'); return; }
+    setSave(true); setErr('');
     try {
-      await bizApi.create({
+      const res = await bizApi.create({
         name: selected.name, address: selected.address,
         latitude: selected.latitude, longitude: selected.longitude,
         phone: selected.phone, website: selected.website,
         category: selected.category, googlePlaceId: selected.placeId,
         openingHours: selected.openingHours,
       });
+      if (res.data?.id) {
+        try {
+          const { default: api } = await import('../lib/api');
+          await api.post('/keywords', { businessId: res.data.id, keyword: keyword.trim().toLowerCase() });
+        } catch { /* non-fatal */ }
+      }
       onAdded();
     } catch (ex: any) {
       setErr(ex.response?.data?.error ?? 'Failed to add business');
-    } finally {
-      setSave(false);
-    }
+    } finally { setSave(false); }
+  }
+
+  const base = selected?.category?.toLowerCase().split(' ')[0]?.replace(/[^a-z]/g, '') ?? 'business';
+
+  if (step === 'search') {
+    return (
+      <Modal title="Add Your Business" onClose={onClose}>
+        <p className="text-sm text-gray-500 mb-4">Search Google Maps — auto-fills address, coordinates and hours.</p>
+        <div className="relative">
+          <input type="text" className="input pr-8" placeholder="Business name or address..."
+            value={q} onChange={e => onInput(e.target.value)} autoFocus />
+          {loading && <div className="absolute right-3 top-3 w-4 h-4 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />}
+        </div>
+        {sugs.length > 0 && (
+          <div className="mt-1 border border-gray-200 rounded-xl overflow-hidden shadow-lg max-h-60 overflow-y-auto">
+            {sugs.map((s: any) => (
+              <button key={s.placeId} onClick={() => pick(s)}
+                className="w-full text-left px-4 py-3 hover:bg-brand-50 border-b border-gray-100 last:border-0 transition-colors">
+                <p className="text-sm font-semibold">{s.mainText}</p>
+                <p className="text-xs text-gray-400">{s.secondaryText}</p>
+              </button>
+            ))}
+          </div>
+        )}
+        {err && <p className="mt-3 text-sm text-red-600">{err}</p>}
+        {selected && (
+          <div className="mt-4">
+            <div className="p-3 bg-brand-50 rounded-xl border border-brand-200 mb-4">
+              <p className="font-semibold text-sm">{selected.name}</p>
+              <p className="text-xs text-gray-500">{selected.address}</p>
+            </div>
+            <button onClick={() => setStep('keyword')} className="btn-primary w-full">
+              Next: Set Core Keyword →
+            </button>
+          </div>
+        )}
+      </Modal>
+    );
   }
 
   return (
-    <Modal title="Add Your Business" onClose={onClose}>
-      <p className="text-sm text-gray-500 mb-4">Search Google Maps — auto-fills address, coordinates and opening hours.</p>
-      <div className="relative">
-        <input type="text" className="input pr-8" placeholder="Business name or address..." value={q} onChange={e => onInput(e.target.value)} autoFocus />
-        {loading && <div className="absolute right-3 top-3 w-4 h-4 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />}
+    <Modal title="Core Keyword for AI Engine" onClose={onClose}>
+      <div className="p-3 bg-brand-50 rounded-xl border border-brand-200 mb-5">
+        <p className="font-semibold text-sm">{selected?.name}</p>
+        <p className="text-xs text-gray-500">{selected?.address}</p>
       </div>
-      {sugs.length > 0 && (
-        <div className="mt-1 border border-gray-200 rounded-xl overflow-hidden shadow-lg max-h-60 overflow-y-auto">
-          {sugs.map((s: any) => (
-            <button key={s.placeId} onClick={() => pick(s)} className="w-full text-left px-4 py-3 hover:bg-brand-50 border-b border-gray-100 last:border-0 transition-colors">
-              <p className="text-sm font-semibold">{s.mainText}</p>
-              <p className="text-xs text-gray-400">{s.secondaryText}</p>
-            </button>
-          ))}
-        </div>
-      )}
-      {selected && (
-        <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-xl">
-          <p className="font-bold">{selected.name}</p>
-          <p className="text-sm text-gray-600">{selected.address}</p>
-          {selected.openingHours
-            ? <p className="text-xs text-green-600 mt-1">✓ Opening hours fetched from Google</p>
-            : <p className="text-xs text-amber-600 mt-1">⚠ No hours found — set manually in Businesses page</p>
-          }
-        </div>
-      )}
-      {err && <p className="mt-3 text-sm text-red-600 bg-red-50 p-3 rounded-xl">{err}</p>}
-      <div className="flex gap-3 mt-5">
-        <button onClick={save} className="btn-primary flex-1" disabled={!selected || saving}>{saving ? 'Adding...' : 'Add this business'}</button>
-        <button onClick={onClose} className="btn-secondary">Cancel</button>
+      <label className="label">What do customers search to find you?</label>
+      <p className="text-xs text-gray-400 mb-3">
+        The Intelligence Engine monitors your Google Maps ranking for this keyword daily and runs automated weekly scans.
+      </p>
+      <input type="text" className="input mb-3"
+        placeholder="e.g. emergency plumber near me, best restaurant near me"
+        value={keyword} onChange={e => setKeyword(e.target.value)} autoFocus />
+      <div className="flex flex-wrap gap-2 mb-5">
+        {[base + ' near me', 'best ' + base, base + ' open now', base + ' in ' + (selected?.address?.split(',')[1]?.trim() ?? 'my city')].map(s => (
+          <button key={s} onClick={() => setKeyword(s)}
+            className="text-xs px-2.5 py-1.5 bg-gray-100 hover:bg-brand-100 hover:text-brand-700 rounded-lg transition-colors">
+            {s}
+          </button>
+        ))}
       </div>
+      {err && <p className="mb-3 text-sm text-red-600 bg-red-50 p-2.5 rounded-xl">{err}</p>}
+      <div className="flex gap-3">
+        <button onClick={() => { setStep('search'); setErr(''); }} className="btn-secondary">← Back</button>
+        <button onClick={save} className="btn-primary flex-1" disabled={saving || !keyword.trim()}>
+          {saving ? 'Adding...' : 'Add Business + Start Monitoring'}
+        </button>
+      </div>
+      <p className="text-xs text-gray-400 text-center mt-2">More keywords can be added from the Businesses page</p>
     </Modal>
   );
 }

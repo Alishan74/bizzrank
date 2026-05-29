@@ -47,7 +47,7 @@ export class AdPressureService {
     for (let i = 0; i < points.length; i += 3) {
       const batch = points.slice(i, i + 3);
       await Promise.all(batch.map(async (point: any) => {
-        const results = await serpApiService.search(point.lat, point.lng, keyword, radiusKm * 1000);
+        const results = await serpApiService.search(point.lat, point.lng, keyword, radiusKm * 1000, 'AD_PRESSURE', job.sessionId);
         results.organic.forEach(r => allOrganic.push({ ...r, pointIndex: point.index, lat: point.lat, lng: point.lng, label: point.label, locationName: point.locationName }));
         results.sponsored.forEach(r => allSponsored.push({ ...r, pointIndex: point.index, lat: point.lat, lng: point.lng, label: point.label, locationName: point.locationName }));
       }));

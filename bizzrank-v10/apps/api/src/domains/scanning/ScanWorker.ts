@@ -1,7 +1,8 @@
 /**
  * Scanning Domain — BullMQ Worker
- * Processes organic scan jobs from the queue.
- * Concurrency 10 — 10 scans run simultaneously.
+ * UPDATED: passes isAutomated flag from job data to runScan()
+ * Automated scans use WEEKLY_SCAN TTL (6h); manual use MANUAL_SCAN TTL (2h).
+ * Priority: manual scans (priority=1) process before automated (priority=10).
  */
 
 import { Worker, type Job } from 'bullmq';
@@ -18,12 +19,17 @@ export function startOrganicScanWorker(): void {
   worker = new Worker(
     'organic-scans',
     async (job: Job) => {
-      logger.info('[ScanWorker] Processing job', { jobId: job.id, scanId: job.data.scanId });
+      logger.info('[ScanWorker] Processing job', {
+        jobId: job.id,
+        scanId: job.data.scanId,
+        isAutomated: job.data.isAutomated ?? false,
+        intelLevel: job.data.intelLevel ?? 'manual',
+      });
       await organicScanService.runScan(job.data);
     },
     {
       connection: createBullMQConnection(),
-      concurrency: 10, // 10 scans simultaneously
+      concurrency: 10,
     }
   );
 
@@ -38,9 +44,10 @@ export function startOrganicScanWorker(): void {
         state: 'failed',
         error_message: err.message,
       }).eq('id', job.data.scanId);
-
       await releaseScanSlot(job.data.userId);
-      eventBus.publish(Events.SCAN_ORGANIC_FAILED, { scanId: job.data.scanId, error: err.message });
+      eventBus.publish(Events.SCAN_ORGANIC_FAILED, {
+        scanId: job.data.scanId, error: err.message,
+      });
     }
   });
 

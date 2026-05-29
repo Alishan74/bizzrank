@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { authApi, bizApi, compApi } from '../lib/api';
+import api from '../lib/api';
 import { AddBizModal, AddCompModal } from '../components/Shared';
 
 function GBPModal({ onClose, onAdded }: any) {
@@ -79,6 +80,101 @@ function GBPModal({ onClose, onAdded }: any) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+function KeywordManager({ biz, plan }: any) {
+  const qc = useQueryClient();
+  const [newKw, setNewKw] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [err, setErr] = useState('');
+
+  const PLAN_KW_LIMITS: Record<string, number> = {
+    starter:1, growth:2, pro:3, agency:4, enterprise:999, professional:3
+  };
+  const limit = PLAN_KW_LIMITS[plan] ?? 1;
+
+  const { data: kwData, refetch } = useQuery({
+    queryKey: ['keywords', biz.id],
+    queryFn: () => api.get('/keywords?businessId=' + biz.id).then(r => r.data),
+  });
+
+  const keywords: any[] = kwData?.keywords ?? [];
+  const remaining = Math.max(0, limit - keywords.length);
+
+  async function addKeyword() {
+    if (!newKw.trim()) return;
+    setAdding(true); setErr('');
+    try {
+      await api.post('/keywords', { businessId: biz.id, keyword: newKw.trim().toLowerCase() });
+      setNewKw('');
+      refetch();
+      qc.invalidateQueries({ queryKey: ['keywords', biz.id] });
+    } catch (ex: any) {
+      setErr(ex.response?.data?.error ?? 'Failed to add keyword');
+    } finally { setAdding(false); }
+  }
+
+  async function removeKeyword(id: string) {
+    await api.delete('/keywords/' + id).catch(() => {});
+    refetch();
+  }
+
+  return (
+    <div className="border-t border-gray-100 pt-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Intelligence Keywords</h4>
+          <span className="text-xs text-gray-400">{keywords.length}/{limit}</span>
+        </div>
+        <span className="text-xs text-gray-400">Daily L1 monitoring</span>
+      </div>
+
+      {keywords.length === 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">
+          <p className="text-xs text-amber-800 font-semibold mb-1">⚠ No keywords set — Intelligence Engine is inactive</p>
+          <p className="text-xs text-amber-600">Add your core keyword so the system can monitor your Google Maps ranking daily.</p>
+        </div>
+      )}
+
+      <div className="space-y-1.5 mb-3">
+        {keywords.map((kw: any, i: number) => (
+          <div key={kw.id} className="flex items-center justify-between bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 group">
+            <div className="flex items-center gap-2">
+              <span className="text-blue-600 text-xs font-bold">#{i+1}</span>
+              <span className="text-sm font-medium text-blue-800">{kw.keyword}</span>
+            </div>
+            <button onClick={() => removeKeyword(kw.id)}
+              className="text-xs text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {remaining > 0 ? (
+        <div className="flex gap-2">
+          <input
+            type="text"
+            className="input text-sm flex-1"
+            placeholder="e.g. emergency plumber near me"
+            value={newKw}
+            onChange={e => setNewKw(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addKeyword()}
+          />
+          <button onClick={addKeyword} disabled={adding || !newKw.trim()}
+            className="btn-primary text-sm px-3 shrink-0">
+            {adding ? '...' : '+ Add'}
+          </button>
+        </div>
+      ) : (
+        <p className="text-xs text-gray-400">
+          {limit} keyword{limit===1?'':'s'} max on your plan. Upgrade to add more.
+        </p>
+      )}
+      {err && <p className="text-xs text-red-600 mt-1">{err}</p>}
     </div>
   );
 }
@@ -176,6 +272,8 @@ function BizCard({ biz, plan }: any) {
           ))}
         </div>
       </div>
+
+      <KeywordManager biz={biz} plan={plan} />
 
       {showAddComp && (
         <AddCompModal

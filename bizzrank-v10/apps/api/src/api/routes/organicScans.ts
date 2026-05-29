@@ -1,17 +1,22 @@
-import { Router, Request, Response } from 'express';
+/**
+ * Manual scans: any keyword allowed (exploration tool).
+ * Credits deducted AFTER scan record created.
+ * 25 credits per scan (25 grid points).
+ */
+import { Router, type Response } from 'express';
 import { db } from '../../infrastructure/database/SupabaseClient.js';
-import { requireAuth, AuthRequest } from '../middleware/auth.js';
+import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { enqueueOrganicScan } from '../../infrastructure/queue/QueueRegistry.js';
-import { billingService } from '../../domains/billing/BillingService.js';
 import { geoService } from '../../domains/geo/GeoService.js';
 import { checkConcurrentScans } from '../../infrastructure/cache/CacheService.js';
 import { redis } from '../../infrastructure/cache/RedisClient.js';
+import { billingService, CREDIT_COSTS } from '../../domains/billing/BillingService.js';
 import { NoLocationError, NoScanPointsError, RateLimitError } from '../../shared/errors/DomainErrors.js';
 import { logger } from '../../infrastructure/logger/Logger.js';
 
 const router = Router();
 
-router.get('/address-autocomplete', requireAuth, async (req: AuthRequest, res: Response) => {
+router.get('/address-autocomplete', requireAuth, async (req: AuthRequest, res) => {
   const q = req.query.q as string;
   if (!q || q.length < 2) return res.json({ suggestions: [] });
   const { getAddressAutocomplete } = await import('../../domains/identity/GoogleMapsService.js');
@@ -25,118 +30,109 @@ router.get('/address-details/:placeId', requireAuth, async (req, res) => {
   res.json({ lat: d.latitude, lng: d.longitude, address: d.address });
 });
 
-router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
-  const { data } = await db
-    .from('organic_scans')
+router.get('/', requireAuth, async (req: AuthRequest, res) => {
+  const { data } = await db.from('organic_scans')
     .select('*, organic_scores(organic_visibility_score, organic_avg_ranking, organic_territory_dominance, organic_top3_cells, organic_total_cells)')
-    .eq('user_id', req.userId!)
-    .order('created_at', { ascending: false })
-    .limit(50);
+    .eq('user_id', req.userId!).order('created_at', { ascending: false }).limit(50);
   res.json({ scans: data ?? [] });
 });
 
-router.get('/:scanId', requireAuth, async (req: AuthRequest, res: Response) => {
-  const { data: scan } = await db.from('organic_scans').select('*').eq('id', req.params.scanId).eq('user_id', req.userId!).single();
+router.get('/:scanId', requireAuth, async (req: AuthRequest, res) => {
+  const { data: scan } = await db.from('organic_scans')
+    .select('*').eq('id', req.params.scanId).eq('user_id', req.userId!).single();
   if (!scan) return res.status(404).json({ error: 'Scan not found' });
-  const { data: score } = await db.from('organic_scores').select('*').eq('scan_id', req.params.scanId).single();
-  const { data: rankings } = await db.from('organic_rankings').select('latitude, longitude, rank_position, point_index, point_label, location_name, found_business_name, found_place_id, result_type, google_maps_url').eq('scan_id', req.params.scanId).order('point_index').order('rank_position', { ascending: true, nullsFirst: false });
+  const [{ data: score }, { data: rankings }] = await Promise.all([
+    db.from('organic_scores').select('*').eq('scan_id', req.params.scanId).single(),
+    db.from('organic_rankings')
+      .select('latitude, longitude, rank_position, point_index, point_label, location_name, found_business_name, found_place_id, result_type, google_maps_url')
+      .eq('scan_id', req.params.scanId).order('point_index').order('rank_position', { ascending: true, nullsFirst: false }),
+  ]);
   res.json({ scan, score, rankings: rankings ?? [] });
 });
 
-// SSE endpoint — real-time scan progress
 router.get('/:scanId/progress', requireAuth, async (req: AuthRequest, res: Response) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
-
-  const scanId = req.params.scanId;
+  const scanId     = req.params.scanId;
   const subscriber = redis.duplicate();
   await subscriber.subscribe(`scan:progress:${scanId}`);
-
-  subscriber.on('message', (channel, message) => {
-    res.write(`data: ${message}\n\n`);
-    const data = JSON.parse(message);
-    if (data.percentComplete >= 100 || data.state === 'completed' || data.state === 'failed') {
-      res.end();
-      subscriber.disconnect();
+  subscriber.on('message', (_ch, msg) => {
+    res.write(`data: ${msg}\n\n`);
+    const d = JSON.parse(msg);
+    if (d.percentComplete >= 100 || d.state === 'completed' || d.state === 'failed') {
+      res.end(); subscriber.disconnect();
     }
   });
-
-  req.on('close', () => {
-    subscriber.disconnect();
-  });
-
-  // Also send current state immediately
-  const { data: scan } = await db.from('organic_scans').select('state, points_completed, total_points').eq('id', scanId).single();
+  req.on('close', () => subscriber.disconnect());
+  const { data: scan } = await db.from('organic_scans')
+    .select('state, points_completed, total_points').eq('id', scanId).single();
   if (scan) {
     const pct = scan.total_points > 0 ? Math.round((scan.points_completed / scan.total_points) * 100) : 0;
     res.write(`data: ${JSON.stringify({ pointsCompleted: scan.points_completed, totalPoints: scan.total_points, percentComplete: pct, state: scan.state })}\n\n`);
-    if (scan.state === 'completed' || scan.state === 'failed') {
-      res.end();
-      subscriber.disconnect();
-    }
+    if (scan.state === 'completed' || scan.state === 'failed') { res.end(); subscriber.disconnect(); }
   }
 });
 
 router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { businessId, keyword, targetingMethod, radiusKm, gridSize, inputAddresses, inputZipCodes } = req.body;
-    if (!businessId || !keyword || !targetingMethod) return res.status(400).json({ error: 'businessId, keyword and targetingMethod required' });
+    if (!businessId || !keyword || !targetingMethod) {
+      return res.status(400).json({ error: 'businessId, keyword and targetingMethod required' });
+    }
+    if (!await checkConcurrentScans(req.userId!, 5)) throw new RateLimitError(5);
 
-    // Check concurrent scan limit (max 5 per user)
-    const canScan = await checkConcurrentScans(req.userId!, 5);
-    if (!canScan) throw new RateLimitError(5);
-
-    // Deduct credit via billing domain
-    await billingService.checkAndDeductCredits({ userId: req.userId!, amount: 1, reason: `Organic scan: ${keyword}`, transactionType: 'usage' });
-
-    const { data: business } = await db.from('businesses').select('latitude, longitude, name, google_place_id').eq('id', businessId).eq('user_id', req.userId!).single();
-    if (!business) return res.status(404).json({ error: 'Business not found' });
-    if (!business.latitude || !business.longitude) throw new NoLocationError();
+    const { data: biz } = await db.from('businesses')
+      .select('latitude, longitude, name, google_place_id')
+      .eq('id', businessId).eq('user_id', req.userId!).single();
+    if (!biz) return res.status(404).json({ error: 'Business not found' });
+    if (!biz.latitude || !biz.longitude) throw new NoLocationError();
 
     const radius = parseFloat(radiusKm ?? '5');
-    const gSize = parseInt(gridSize ?? '3');
+    const gSize  = parseInt(gridSize ?? '3');
 
-    const { data: scan, error } = await db.from('organic_scans').insert({
-      user_id: req.userId, business_id: businessId, keyword,
-      targeting_method: targetingMethod, radius_km: radius, grid_size: gSize,
-      input_addresses: inputAddresses ?? null, input_zip_codes: inputZipCodes ?? null,
-      state: 'pending', credits_consumed: 1,
-      scan_date: new Date().toISOString().split('T')[0],
-      total_points: 0, points_completed: 0,
-    }).select().single();
+    const { data: comps } = await db.from('competitors')
+      .select('id, name, google_place_id').eq('business_id', businessId).neq('is_active', false).order('display_order');
 
-    if (error) throw new Error(error.message);
-
-    // Generate points and enqueue
-    const { data: competitors } = await db.from('competitors').select('id, name, google_place_id').eq('business_id', businessId).eq('is_active', true).order('display_order');
-
-    let points = [];
+    let points: any[] = [];
     if (targetingMethod === 'auto_grid') {
-      points = geoService.generateAutoGrid(business.latitude, business.longitude, radius, gSize);
+      points = geoService.generateAutoGrid(biz.latitude, biz.longitude, radius, gSize);
     } else if (targetingMethod === 'addresses' && inputAddresses?.length) {
       points = await geoService.generateAddressPoints(inputAddresses.slice(0, 9));
     } else if (targetingMethod === 'zip_codes' && inputZipCodes?.length) {
       points = await geoService.generateZipCodePoints(inputZipCodes.slice(0, 6), radius);
     }
-
     if (!points.length) throw new NoScanPointsError();
 
-    await db.from('organic_scans').update({ scan_points: points, total_points: points.length }).eq('id', scan.id);
+    // Create scan FIRST — then deduct credits
+    const { data: scan, error: scanErr } = await db.from('organic_scans').insert({
+      user_id: req.userId, business_id: businessId, keyword,
+      targeting_method: targetingMethod, radius_km: radius, grid_size: gSize,
+      input_addresses: inputAddresses ?? null, input_zip_codes: inputZipCodes ?? null,
+      state: 'pending', credits_consumed: CREDIT_COSTS.MANUAL_SCAN,
+      scan_date: new Date().toISOString().split('T')[0],
+      scan_points: points, total_points: points.length, points_completed: 0,
+      is_automated: false,
+    }).select().single();
+    if (scanErr || !scan) throw new Error(scanErr?.message ?? 'Failed to create scan');
 
-    await enqueueOrganicScan({
-      scanId: scan.id, userId: req.userId, businessId,
-      clientGooglePlaceId: business.google_place_id,
-      competitors: (competitors ?? []).map(c => ({ id: c.id, name: c.name, googlePlaceId: c.google_place_id })),
-      keyword, points, radiusKm: radius,
+    await billingService.checkAndDeductCredits({
+      userId: req.userId!, amount: CREDIT_COSTS.MANUAL_SCAN,
+      reason: `Manual scan: ${keyword}`, transactionType: 'usage',
     });
 
-    logger.info('[Route] Organic scan created', { scanId: scan.id, keyword });
-    res.status(201).json({ scanId: scan.id, state: 'pending', totalPoints: points.length });
+    await enqueueOrganicScan({
+      scanId: scan.id, userId: req.userId!, businessId,
+      clientGooglePlaceId: biz.google_place_id,
+      competitors: (comps ?? []).map(c => ({ id: c.id, name: c.name, googlePlaceId: c.google_place_id })),
+      keyword, points, radiusKm: radius, isAutomated: false,
+    });
+
+    logger.info('[Route] Manual scan created', { scanId: scan.id, keyword, credits: CREDIT_COSTS.MANUAL_SCAN });
+    res.status(201).json({ scanId: scan.id, state: 'pending', totalPoints: points.length, creditsConsumed: CREDIT_COSTS.MANUAL_SCAN });
   } catch (err: any) {
-    const status = err.statusCode ?? 500;
-    res.status(status).json({ error: err.message });
+    res.status(err.statusCode ?? 500).json({ error: err.message });
   }
 });
 

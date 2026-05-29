@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { bizApi, reviewApi } from '../lib/api';
 import { Skeleton, Modal } from '../components/Shared';
+import ReviewIntelligencePanel from '../components/ReviewIntelligencePanel';
 
 function BrandVoiceModal({ biz, onClose, onSaved }: any) {
   const [ownerName, setOwnerName] = useState(biz.brand_voice?.ownerName ?? '');
@@ -341,6 +342,8 @@ export default function ReviewsPage() {
           </div>
         </div>
       )}
+
+      {selectedBizId && <ReviewIntelligencePanel businessId={selectedBizId} />}
 
       {isLoading ? <Skeleton /> : reviews.length === 0 ? (
         <div className="card text-center py-10">

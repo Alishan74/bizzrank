@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { supabase } from '../../infrastructure/database/SupabaseClient.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
 import { generateReviewReply, generateBatchReplies, estimateRevenueLost } from '../../domains/reviews/GeminiService.js';
-import { fetchGBPReviews, postGBPReply } from '../../domains/identity/GoogleMapsService.js';
+import { fetchGBPReviews, postGBPReply } from '../../domains/identity/GBPService.js';
 import { serpFetchReviews, hasSerpApiKey } from '../../domains/serpapi/SerpApiService.js';
 
 const router = Router();
@@ -126,6 +126,14 @@ router.post('/fetch', requireAuth, async (req: AuthRequest, res) => {
 
 // POST /api/reviews/generate-all
 router.post('/generate-all', requireAuth, async (req: AuthRequest, res) => {
+  // Gate: AI replies not available on Starter plan
+  const { data: _planProfile } = await supabase.from('profiles').select('plan').eq('id', req.userId!).single();
+  if (!canUseAiReplies(_planProfile?.plan ?? 'starter')) {
+    return res.status(403).json({
+      error: 'AI review replies require Growth plan or higher. Upgrade to unlock this feature.',
+      upgradeRequired: true,
+    });
+  }
   const { businessId } = req.body;
   if (!businessId) return res.status(400).json({ error: 'businessId required' });
 
