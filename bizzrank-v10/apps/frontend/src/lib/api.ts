@@ -69,7 +69,9 @@ export const authApi = {
   signup: (d: any) => api.post('/auth/signup', d),
   login: (d: any) => api.post('/auth/login', d),
   me: () => api.get('/auth/me'),
-  refresh: () => api.post('/auth/refresh'),
+  refresh:         () => api.post('/auth/refresh'),
+  forgotPassword:  (d: any) => api.post('/auth/forgot-password', d),
+  resetPassword:   (d: any) => api.post('/auth/reset-password', d),
   gbpConnect: () => api.get('/auth/gbp/connect'),
   gbpLocations: () => api.get('/auth/gbp/locations'),
 };
@@ -137,6 +139,7 @@ export const profileApi = {
   credits: () => api.get('/profile/credits'),
   updateDetails: (d: any) => api.patch('/profile/details', d),
   changePassword: (d: any) => api.patch('/profile/password', d),
+  deleteAccount:  (d: any) => api.delete('/profile/account', { data: d }),
 };
 
 export default api;
@@ -203,17 +206,22 @@ export const billingApi = {
 };
 
 export const agencyApi = {
-  dashboard:         ()                       => api.get('/agency/dashboard'),
-  clients:           ()                       => api.get('/agency/clients'),
-  createClient:      (d: any)                 => api.post('/agency/clients', d),
-  getClient:         (id: string)             => api.get('/agency/clients/' + id),
-  updateClient:      (id: string, d: any)     => api.patch('/agency/clients/' + id, d),
-  deleteClient:      (id: string)             => api.delete('/agency/clients/' + id),
+  dashboard:         ()                           => api.get('/agency/dashboard'),
+  clients:           ()                           => api.get('/agency/clients'),
+  createClient:      (d: any)                     => api.post('/agency/clients', d),
+  getClient:         (id: string)                 => api.get('/agency/clients/' + id),
+  updateClient:      (id: string, d: any)         => api.patch('/agency/clients/' + id, d),
+  deleteClient:      (id: string)                 => api.delete('/agency/clients/' + id),
+  setStatus:         (id: string, status: string) => api.patch('/agency/clients/' + id + '/status', { status }),
+  rotateToken:       (id: string)                 => api.post('/agency/clients/' + id + '/rotate-token'),
   assignBusiness:    (clientId: string, businessId: string) => api.post('/agency/clients/' + clientId + '/assign-business', { businessId }),
   unassignBusiness:  (clientId: string, businessId: string) => api.post('/agency/clients/' + clientId + '/unassign-business', { businessId }),
   addNote:           (clientId: string, note: string) => api.post('/agency/clients/' + clientId + '/notes', { note }),
-  workQueue:         ()                       => api.get('/agency/work-queue'),
-  resolveTask:       (id: string)             => api.post('/agency/work-queue/' + id + '/resolve'),
-  generateTasks:     ()                       => api.post('/agency/work-queue/generate'),
-  credits:           ()                       => api.get('/agency/credits'),
+  workQueue:         ()                           => api.get('/agency/work-queue'),
+  resolveTask:       (id: string)                 => api.post('/agency/work-queue/' + id + '/resolve'),
+  generateTasks:     ()                           => api.post('/agency/work-queue/generate'),
+  credits:           ()                           => api.get('/agency/credits'),
+  analytics:         ()                           => api.get('/agency/analytics'),
+  bulkScan:          (clientId: string)           => api.post('/agency/bulk-scan', { clientId }),
+  exportData:        ()                           => api.get('/agency/export'),
 };

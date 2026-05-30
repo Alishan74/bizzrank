@@ -16,25 +16,58 @@ router.get('/', async (req: OrgRequest, res) => {
       return res.status(403).json({ error: 'No access to this business' });
     }
 
-    const { data: latestScan } = await supabase.from('organic_scans')
+    // Get the two most recent completed scans
+    const { data: recentScans } = await supabase.from('organic_scans')
       .select('id, scan_date, keyword')
       .eq('business_id', businessId as string)
       .eq('state', 'completed')
       .order('created_at', { ascending: false })
-      .limit(1).single();
+      .limit(2);
 
-    if (!latestScan) {
+    if (!recentScans?.length) {
       return res.json({ leaderboard: [], message: 'No completed scans found.' });
     }
 
+    const latestScan   = recentScans[0];
+    const previousScan = recentScans[1] ?? null;
+
+    // Get current leaderboard
     const { data: leaderboard } = await supabase.from('leaderboard_scores')
       .select('*').eq('scan_id', latestScan.id).order('leaderboard_rank');
 
+    // Get previous rank for the client business
+    let prevRank: number | null     = null;
+    let rankChange: number | null   = null;
+    const currentEntry = (leaderboard ?? []).find((e: any) => e.is_client_business);
+    const currentRank  = currentEntry?.leaderboard_rank ?? null;
+
+    if (previousScan && currentRank !== null) {
+      const { data: prevEntry } = await supabase.from('leaderboard_scores')
+        .select('leaderboard_rank')
+        .eq('scan_id', previousScan.id)
+        .eq('is_client_business', true)
+        .single();
+
+      prevRank   = prevEntry?.leaderboard_rank ?? null;
+      // Positive = moved up (was #5, now #3 = change +2)
+      // Negative = moved down (was #3, now #5 = change -2)
+      rankChange = (prevRank !== null && currentRank !== null)
+        ? prevRank - currentRank
+        : null;
+    }
+
     res.json({
-      leaderboard: leaderboard ?? [],
-      scanDate: latestScan.scan_date, keyword: latestScan.keyword, scanId: latestScan.id,
+      leaderboard:  leaderboard ?? [],
+      scanDate:     latestScan.scan_date,
+      keyword:      latestScan.keyword,
+      scanId:       latestScan.id,
+      currentRank,
+      prevRank,
+      rankChange,   // positive = moved up, negative = moved down, null = first scan
     });
-  } catch (err: any) { res.status(500).json({ error: err.message ?? 'Leaderboard failed' }); }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Leaderboard failed' });
+  }
 });
 
 export default router;

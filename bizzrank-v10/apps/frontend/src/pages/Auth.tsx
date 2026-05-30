@@ -61,7 +61,12 @@ export function LoginPage() {
         </button>
       </form>
       <p className="text-center text-sm text-gray-500 mt-4">
-        No account?{' '}
+        <div className="text-right mb-2">
+            <a href="/forgot-password" className="text-xs text-gray-400 hover:text-brand-600 hover:underline">
+              Forgot password?
+            </a>
+          </div>
+          No account?{' '}
         <a href="/signup" className="text-brand-600 font-semibold hover:underline">Sign up</a>
       </p>
     </AuthShell>
@@ -86,7 +91,7 @@ export function SignupPage() {
     try {
       const r = await authApi.signup(form);
       setAuth(r.data.token, r.data.user);
-      nav('/overview');
+      nav('/onboarding');
     } catch (ex: any) {
       setErr(ex.response?.data?.error ?? 'Signup failed');
     } finally {

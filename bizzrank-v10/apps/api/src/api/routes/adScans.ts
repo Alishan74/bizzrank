@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { supabase } from '../../infrastructure/database/SupabaseClient.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
 import { geoService } from '../../domains/geo/GeoService.js';
+import { billingService, CREDIT_COSTS } from '../../domains/billing/BillingService.js';
+import { InsufficientCreditsError } from '../../shared/errors/DomainErrors.js';
 import { enqueueAdSlot } from '../../infrastructure/queue/QueueRegistry.js';
 import { getAddressAutocomplete, getPlaceDetails } from '../../domains/identity/GoogleMapsService.js';
 
@@ -58,8 +60,10 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const radius = parseFloat(radiusKm ?? '5');
   const gSize = parseInt(gridSize ?? '3');
 
-  const { data: profile } = await supabase.from('profiles').select('credits_balance').eq('id', req.userId!).single();
-  if (!profile) return res.status(402).json({ error: 'Profile not found' });
+  // Use billingService for atomic, race-condition-safe credit deduction
+  // Raw supabase.update() had a race condition: two simultaneous ad scans
+  // could both pass the balance check before either deducted, going negative.
+  const creditsBalance = await billingService.getCreditsBalance(req.userId!);
 
   const { data: businesses } = await supabase
     .from('businesses')
@@ -95,11 +99,11 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const slotsCount = validTimes.length * businesses.length;
   const totalSlots = slotsCount * 25;
 
-  if (profile.credits_balance < totalSlots) {
+  if (creditsBalance < totalSlots) {
     return res.status(402).json({
-      error: 'This session requires ' + totalSlots + ' credits (' + validTimes.length + ' time slots x ' + businesses.length + ' businesses). You have ' + profile.credits_balance + ' credits.',
+      error: 'This session requires ' + totalSlots + ' credits (' + validTimes.length + ' time slots × ' + businesses.length + ' businesses). You have ' + creditsBalance + ' credits.',
       required: totalSlots,
-      available: profile.credits_balance,
+      available: creditsBalance,
     });
   }
 
@@ -123,13 +127,19 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
 
-  // Deduct credits AFTER session is confirmed created
-  await supabase.from('profiles').update({ credits_balance: profile.credits_balance - totalSlots }).eq('id', req.userId!);
-  await supabase.from('credit_transactions').insert({
-    user_id: req.userId, amount: -totalSlots, balance_after: profile.credits_balance - totalSlots,
-    reason: 'Ad scan: ' + keyword + ' (' + slotsCount + ' slots × 25 pts)',
-    transaction_type: 'usage',
-  });
+  // Atomic credit deduction via billingService — race-condition safe
+  try {
+    await billingService.checkAndDeductCredits({
+      userId: req.userId!,
+      amount: totalSlots,
+      reason: 'Ad scan: ' + keyword + ' (' + slotsCount + ' slots × 25 pts)',
+      transactionType: 'usage',
+    });
+  } catch (err: any) {
+    // If deduction fails after session was created, clean up the session
+    await supabase.from('ad_scan_sessions').delete().eq('id', session.id);
+    return res.status(402).json({ error: err.message ?? 'Insufficient credits' });
+  }
 
   // Create slot records
   const slotRows: any[] = [];

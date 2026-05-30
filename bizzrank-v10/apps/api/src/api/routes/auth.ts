@@ -254,4 +254,53 @@ router.post('/refresh', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+/**
+ * POST /auth/forgot-password
+ * Sends a password reset email via Supabase Auth.
+ * Always returns success to prevent email enumeration.
+ */
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+      redirectTo: (process.env.FRONTEND_URL ?? 'http://localhost:5173') + '/reset-password',
+    });
+    if (error) return res.status(400).json({ error: error.message });
+    // Always success — prevents email enumeration attack
+    res.json({ success: true, message: 'If an account exists for this email, a reset link has been sent' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Reset request failed' });
+  }
+});
+
+/**
+ * POST /auth/reset-password
+ * Called after user clicks the reset link (which contains an access token).
+ * Updates the user's password using the token from the reset email.
+ */
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { accessToken, newPassword } = req.body;
+    if (!accessToken || !newPassword) {
+      return res.status(400).json({ error: 'accessToken and newPassword required' });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+    // Set the session from the reset token, then update password
+    const { data, error: sessErr } = await supabase.auth.setSession({
+      access_token: accessToken, refresh_token: '',
+    });
+    if (sessErr || !data.user) {
+      return res.status(400).json({ error: 'Invalid or expired reset link — please request a new one' });
+    }
+    const { error } = await supabase.auth.admin.updateUserById(data.user.id, { password: newPassword });
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Password reset failed' });
+  }
+});
+
 export default router;

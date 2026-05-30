@@ -15,6 +15,7 @@ import { billingService } from '../billing/BillingService.js';
 import { enqueueReviewSync } from '../../infrastructure/queue/QueueRegistry.js';
 import { aiVisibilityService } from '../aivisibility/AIVisibilityService.js';
 import { gbpGuardService } from '../gbpguard/GBPGuardService.js';
+import { emailService } from '../../shared/utils/emailService.js';
 
 export class WeeklyScheduler {
 
@@ -60,6 +61,10 @@ export class WeeklyScheduler {
     logger.info('[Scheduler] Daily L2 done', { scanned, skipped });
   }
 
+  /**
+   * runWeeklyReports — process L3 trend data and send weekly report emails.
+   * Sends a brief email to each user with their top business visibility score.
+   */
   async runWeeklyReports(): Promise<void> {
     logger.info('[Scheduler] Weekly L3 reports start');
     const { data: profiles } = await db.from('profiles').select('id, plan');

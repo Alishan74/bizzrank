@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '../store/auth';
 import { authApi, profileApi, billingApi } from '../lib/api';
-
-// ── FINAL plan config — matches BillingService.ts exactly ─────
 const PLANS: Record<string, any> = {
   starter:      { name:'Starter',     price:'$49/mo',  credits:900,   businesses:1,  keywords:1, competitors:1, color:'bg-gray-100 text-gray-700'    },
   growth:       { name:'Growth',      price:'$119/mo', credits:1600,  businesses:1,  keywords:2, competitors:2, color:'bg-green-100 text-green-700'  },
@@ -39,6 +38,10 @@ export default function ProfilePage() {
   const [pwErr, setPwErr]             = useState('');
   const [savingDetails, setSavingDetails] = useState(false);
   const [savingPw, setSavingPw]           = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletePw, setDeletePw]               = useState('');
+  const [deleting, setDeleting]               = useState(false);
+  const logout = useAuth(st => st.logout);
 
   useEffect(() => {
     if (me) { setFullName(me.full_name ?? ''); setCompanyName(me.company_name ?? ''); }
@@ -331,6 +334,57 @@ export default function ProfilePage() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* ── Danger Zone (only shown on Account Details tab) ── */}
+      {tab === 'details' && (
+        <div className="card border border-red-100 mt-2">
+          <h3 className="font-bold text-red-700 mb-1 text-sm">Danger Zone</h3>
+          <p className="text-xs text-gray-400 mb-3">Permanently delete your account and all associated data. This cannot be undone.</p>
+          <button onClick={() => setShowDeleteModal(true)}
+            className="text-sm text-red-600 border border-red-200 px-4 py-2 rounded-xl hover:bg-red-50 transition-colors">
+            Delete my account
+          </button>
+        </div>
+      )}
+
+      {/* ── Delete Account Modal ── */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+            <div>
+              <h3 className="font-bold text-red-700 text-lg mb-1">Delete account permanently?</h3>
+              <p className="text-sm text-gray-500">
+                This will delete all your businesses, scans, reviews, keywords, competitors, and all data.
+                <strong> This cannot be undone.</strong>
+              </p>
+            </div>
+            <div>
+              <label className="label text-sm">Confirm your password to proceed</label>
+              <input type="password" className="input w-full" value={deletePw}
+                onChange={e => setDeletePw(e.target.value)} placeholder="Enter your password" autoFocus />
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => { setShowDeleteModal(false); setDeletePw(''); }}
+                className="flex-1 btn-secondary">Cancel</button>
+              <button
+                disabled={!deletePw || deleting}
+                onClick={async () => {
+                  setDeleting(true);
+                  try {
+                    await profileApi.deleteAccount({ password: deletePw });
+                    logout();
+                    window.location.href = '/login';
+                  } catch (ex: any) {
+                    alert(ex.response?.data?.error ?? 'Deletion failed');
+                    setDeleting(false);
+                  }
+                }}
+                className="flex-1 bg-red-600 text-white rounded-xl py-2 font-semibold hover:bg-red-700 disabled:opacity-50 transition-colors">
+                {deleting ? 'Deleting…' : 'Delete forever'}
+              </button>
+            </div>
           </div>
         </div>
       )}

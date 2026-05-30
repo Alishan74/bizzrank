@@ -13,6 +13,7 @@ import { eventBus, Events } from '../../infrastructure/events/EventBus.js';
 import { logger } from '../../infrastructure/logger/Logger.js';
 import { InsufficientCreditsError } from '../../shared/errors/DomainErrors.js';
 import type { CreditDeduction } from '../../shared/types/contracts.js';
+import { emailService } from '../../shared/utils/emailService.js';
 
 export interface PlanConfig {
   name:                       string;
@@ -131,6 +132,26 @@ export class BillingService {
     logger.info('[Billing] Credits deducted', {
       userId: d.userId, amount: d.amount, newBalance: nb,
     });
+
+    // Send low-credits email when balance drops below 20% of allowance
+    // Load profile to get email + monthly allowance
+    try {
+      const { data: profile } = await db.from('profiles')
+        .select('monthly_allowance, plan').eq('id', d.userId).single();
+      const allowance = profile?.monthly_allowance ?? 900;
+      if (nb < allowance * 0.2 && nb >= 0) {
+        // Get email from auth
+        const { createClient } = await import('@supabase/supabase-js');
+        const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_KEY!);
+        const { data: au } = await admin.auth.admin.getUserById(d.userId);
+        const email = au?.user?.email;
+        if (email) {
+          emailService.sendLowCredits({
+            to: email, balance: nb, plan: profile?.plan ?? 'starter',
+          }).catch(() => {}); // non-critical — don't block the deduction
+        }
+      }
+    } catch { /* non-critical */ }
   }
 
   async getCreditHistory(userId: string, limit = 50): Promise<any[]> {

@@ -21,6 +21,7 @@
  * GET  /agency/report/:token   — PUBLIC — client-facing report (no auth required)
  */
 import { Router, Request, Response } from 'express';
+import rateLimit from 'express-rate-limit';
 import { db } from '../../infrastructure/database/SupabaseClient.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
 
@@ -437,9 +438,17 @@ router.get('/credits', requireAuth, async (req: AuthRequest, res) => {
   });
 });
 
+// Rate limiter for the public report endpoint
+// 30 requests per hour per IP — prevents scraping
+const reportLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, max: 30,
+  message: { error: 'Too many requests' },
+  standardHeaders: true, legacyHeaders: false,
+});
+
 // ── GET /agency/report/:token (PUBLIC — no auth) ──────────────
 // Client-facing report. No login required. Token is unique per client.
-router.get('/report/:token', async (req: Request, res: Response) => {
+router.get('/report/:token', reportLimiter, async (req: Request, res: Response) => {
   const { data: client } = await db.from('agency_clients')
     .select('*, organizations(name)')
     .eq('report_token', req.params.token)
@@ -528,6 +537,140 @@ router.get('/report/:token', async (req: Request, res: Response) => {
 
   <div class="footer">Powered by ${agencyName} · ${reportDate} · This report is generated automatically</div>
 </div></body></html>`);
+});
+
+
+// ── PATCH /agency/clients/:id/status ─────────────────────────
+// Quick status toggle: active / paused / churned
+router.patch('/clients/:clientId/status', requireAuth, async (req: AuthRequest, res) => {
+  const orgId = await getOrgId(req.userId!);
+  if (!orgId) return res.status(404).json({ error: 'No organization' });
+  const { status } = req.body;
+  if (!['active','paused','churned'].includes(status))
+    return res.status(400).json({ error: 'Invalid status' });
+  await db.from('agency_clients')
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq('id', req.params.clientId).eq('org_id', orgId);
+  res.json({ success: true });
+});
+
+// ── POST /agency/clients/:id/rotate-token ────────────────────
+// Regenerate the shareable report token (invalidates old URL)
+router.post('/clients/:clientId/rotate-token', requireAuth, async (req: AuthRequest, res) => {
+  const orgId = await getOrgId(req.userId!);
+  if (!orgId) return res.status(404).json({ error: 'No organization' });
+  const { createRequire } = await import('module');
+  const newToken = (await import('crypto')).randomBytes(24).toString('hex');
+  await db.from('agency_clients')
+    .update({ report_token: newToken, updated_at: new Date().toISOString() })
+    .eq('id', req.params.clientId).eq('org_id', orgId);
+  res.json({ success: true, token: newToken });
+});
+
+// ── GET /agency/analytics ─────────────────────────────────────
+// Monthly trend: revenue, client count, avg visibility over time
+router.get('/analytics', requireAuth, async (req: AuthRequest, res) => {
+  const orgId = await getOrgId(req.userId!);
+  if (!orgId) return res.status(404).json({ error: 'No organization' });
+  const uid = req.userId!;
+
+  // Last 8 weeks of scan scores for trend
+  const { data: scores } = await db.from('organic_scores')
+    .select('organic_visibility_score, scanned_at')
+    .eq('user_id', uid)
+    .order('scanned_at', { ascending: false })
+    .limit(200);
+
+  // Group by week
+  const weekMap = new Map<string, number[]>();
+  for (const s of scores ?? []) {
+    const d    = new Date(s.scanned_at);
+    const week = d.toISOString().slice(0, 10).slice(0, 7); // YYYY-MM
+    if (!weekMap.has(week)) weekMap.set(week, []);
+    weekMap.get(week)!.push(s.organic_visibility_score);
+  }
+
+  const trend = [...weekMap.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-6)
+    .map(([month, vals]) => ({
+      month,
+      avgScore: Math.round(vals.reduce((a, b) => a + b, 0) / vals.length),
+      scans: vals.length,
+    }));
+
+  // Review response rate over time
+  const { data: reviews } = await db.from('reviews')
+    .select('is_replied, review_date').eq('user_id', uid)
+    .order('review_date', { ascending: false }).limit(500);
+
+  const totalReviews    = reviews?.length ?? 0;
+  const repliedReviews  = reviews?.filter((r: any) => r.is_replied).length ?? 0;
+  const responseRate    = totalReviews > 0 ? Math.round((repliedReviews / totalReviews) * 100) : 0;
+
+  // Client count over time (approximation from created_at)
+  const { data: clients } = await db.from('agency_clients')
+    .select('created_at, status').eq('org_id', orgId);
+
+  res.json({ trend, responseRate, totalReviews, repliedReviews,
+    clientStats: {
+      total:  clients?.length ?? 0,
+      active: clients?.filter((c: any) => c.status === 'active').length ?? 0,
+      paused: clients?.filter((c: any) => c.status === 'paused').length ?? 0,
+      churned: clients?.filter((c: any) => c.status === 'churned').length ?? 0,
+    }
+  });
+});
+
+// ── POST /agency/bulk-scan ────────────────────────────────────
+// Trigger a manual scan for ALL businesses of a specific client
+router.post('/bulk-scan', requireAuth, async (req: AuthRequest, res) => {
+  const orgId = await getOrgId(req.userId!);
+  if (!orgId) return res.status(404).json({ error: 'No organization' });
+  const { clientId } = req.body;
+  if (!clientId) return res.status(400).json({ error: 'clientId required' });
+
+  const { data: businesses } = await db.from('businesses')
+    .select('id, name').eq('agency_client_id', clientId).eq('user_id', req.userId!);
+
+  if (!businesses?.length) return res.status(404).json({ error: 'No businesses for this client' });
+
+  // Return list of businesses that need scanning — frontend navigates to /organic/new
+  // We don't create scans here (credits need to be deducted per scan via organicScans route)
+  res.json({
+    businesses: businesses.map((b: any) => ({ id: b.id, name: b.name })),
+    message: `${businesses.length} business${businesses.length > 1 ? 'es' : ''} ready to scan`,
+  });
+});
+
+// ── GET /agency/export ────────────────────────────────────────
+// Export all client data as JSON (for backup / reporting tools)
+router.get('/export', requireAuth, async (req: AuthRequest, res) => {
+  const orgId = await getOrgId(req.userId!);
+  if (!orgId) return res.status(404).json({ error: 'No organization' });
+  const uid = req.userId!;
+
+  const [{ data: clients }, { data: members }, { data: org }] = await Promise.all([
+    db.from('agency_clients').select('*').eq('org_id', orgId),
+    db.from('org_members')
+      .select('user_id, role, profiles(full_name)')
+      .eq('org_id', orgId),
+    db.from('organizations').select('name, plan, created_at').eq('id', orgId).single(),
+  ]);
+
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', 'attachment; filename="bizzrank-export.json"');
+  res.json({
+    exportedAt: new Date().toISOString(),
+    org: org ?? {},
+    clients: (clients ?? []).map((c: any) => ({
+      name: c.name, status: c.status,
+      contactName: c.contact_name, contactEmail: c.contact_email,
+      monthlyFee: c.monthly_fee, creditBudget: c.monthly_credit_budget,
+      createdAt: c.created_at,
+    })),
+    teamSize: (members ?? []).length,
+  });
 });
 
 export default router;

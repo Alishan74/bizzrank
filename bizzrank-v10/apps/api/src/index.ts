@@ -71,6 +71,11 @@ app.use(cors({
   },
   credentials: true,
 }));
+// Stripe webhook needs raw Buffer body for signature verification.
+// MUST be registered BEFORE express.json() — order matters.
+// express.json() parses the body and destroys the raw Buffer.
+// Without this, stripe.webhooks.constructEvent() throws every time.
+app.use('/api/billing/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '10mb' }));
 
 // Rate limiting — prevent abuse
@@ -111,6 +116,7 @@ app.use('/api/custom-scans',        customScanRoutes);
 app.use('/api/gbp-guard',           gbpGuardRoutes);
 app.use('/api/ai-visibility',        aiVisibilityRoutes);
 app.use('/api/billing',             billingRoutes);
+app.use('/api/agency',              agencyRoutes);
 
 try {
   const { default: configRoutes } = await import('./api/routes/config.js');
@@ -230,8 +236,6 @@ function start() {
   startReviewWorker();
   startCronJobs();
   const PORT = parseInt(process.env.PORT ?? '3000');
-  app.use('/api/agency', agencyRoutes);
-
 app.listen(PORT, '0.0.0.0', () => {
     logger.info(`BizzRank AI v10 on port ${PORT}`);
     logger.info('Workers: scans(10) · ad-slots(20) · reviews(50)');
