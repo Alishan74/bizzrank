@@ -33,7 +33,7 @@ export class OrgService {
       monthly_allowance: planConfig.credits,
       max_businesses: planConfig.maxBusinesses,
       max_users: planConfig.maxUsers,
-      owner_user_id: userId,
+      owner_id: userId,
     }).select().single();
     if (error || !org) throw new Error('Failed to create org: ' + (error?.message ?? 'unknown'));
 

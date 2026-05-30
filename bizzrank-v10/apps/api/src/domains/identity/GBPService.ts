@@ -1,3 +1,4 @@
+import { decryptToken } from '../../shared/utils/tokenEncryption.js';
 import 'dotenv/config';
 
 export async function fetchGBPReviews(accessToken: string, locationName: string) {

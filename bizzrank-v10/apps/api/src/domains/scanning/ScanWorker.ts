@@ -16,7 +16,9 @@ import { eventBus, Events } from '../../infrastructure/events/EventBus.js';
 let worker: Worker | null = null;
 
 export function startOrganicScanWorker(): void {
-  worker = new Worker(
+  worker = // lockDuration replaces the removed BullMQ v5 `timeout` job option
+  // If a job takes longer than this it is considered stalled and retried
+new Worker(
     'organic-scans',
     async (job: Job) => {
       logger.info('[ScanWorker] Processing job', {

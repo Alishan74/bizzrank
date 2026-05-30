@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { gbpGuardApi, bizApi } from '../lib/api';
 
@@ -17,8 +17,12 @@ export default function GBPGuardPage() {
   const { data: businesses } = useQuery({
     queryKey: ['businesses'],
     queryFn:  () => bizApi.list().then(r => r.data.businesses),
-    onSuccess: (data: any[]) => { if (data?.length && !selectedBizId) setSelectedBizId(data[0].id); },
   });
+ 
+  // React Query v5 removed onSuccess from useQuery
+  useEffect(() => {
+    if (businesses?.length && !selectedBizId) setSelectedBizId(businesses[0].id);
+  }, [businesses]);
 
   const bizId = selectedBizId || businesses?.[0]?.id || '';
 

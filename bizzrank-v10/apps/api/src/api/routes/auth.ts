@@ -16,12 +16,16 @@ import { supabase } from '../../infrastructure/database/SupabaseClient.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
 import { getGBPAuthUrl, exchangeGBPCode, fetchGBPLocations } from '../../domains/identity/GoogleMapsService.js';
 import { orgService } from '../../domains/orgs/OrgService.js';
+import { encryptToken } from '../../shared/utils/tokenEncryption.js';
 import { PLANS } from '../../domains/billing/BillingService.js';
 import jwt from 'jsonwebtoken';
 import 'dotenv/config';
 
 const router = Router();
-const JWT = process.env.JWT_SECRET!;
+// SECURITY: validate JWT_SECRET at startup — if undefined, jwt.sign() uses
+// undefined as secret meaning ALL tokens verify against each other (auth bypass)
+const JWT = process.env.JWT_SECRET;
+if (!JWT) throw new Error('[auth] JWT_SECRET environment variable is required but not set');
 
 /**
  * Create a brand-new user + their own personal org.
@@ -114,7 +118,7 @@ router.post('/accept-invite-signup', async (req, res) => {
 
     await supabase.from('profiles').upsert({
       id: data.user.id, full_name: fullName, plan: 'starter',
-      credits_balance: 0, monthly_allowance: 0,
+      credits_balance: PLANS.starter.credits, monthly_allowance: PLANS.starter.credits,
     }, { onConflict: 'id' });
 
     // Accept the invitation — adds them to the inviter's org with the assigned role
@@ -188,13 +192,21 @@ router.get('/gbp/connect', requireAuth, (req: AuthRequest, res) => {
 });
 
 router.get('/gbp/callback', async (req, res) => {
-  const { code, state: userId } = req.query as any;
-  if (!code || !userId) return res.status(400).send('Missing params');
+  const { code, state: stateToken } = req.query as any;
+  if (!code || !stateToken) return res.status(400).send('Missing params');
   try {
+    // CSRF verification: look up userId from Redis state token
+    const { redis } = await import('../../infrastructure/cache/RedisClient.js');
+    const userId = await redis.get('gbp:state:' + stateToken);
+    if (!userId) {
+      return res.status(400).send('Invalid or expired OAuth state — please try connecting GBP again');
+    }
+    await redis.del('gbp:state:' + stateToken); // one-time use
     const { accessToken, refreshToken } = await exchangeGBPCode(code);
+    // Encrypt tokens before storage — decrypt in GBPService when needed
     await supabase.from('profiles').update({
-      gbp_access_token: accessToken,
-      gbp_refresh_token: refreshToken,
+      gbp_access_token: encryptToken(accessToken),
+      gbp_refresh_token: encryptToken(refreshToken),
       gbp_connected: true,
     }).eq('id', userId);
     const locations = await fetchGBPLocations(accessToken);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { bizApi, aiVisibilityApi } from '../lib/api';
 import CitationsTab from '../components/CitationsTab';
@@ -49,8 +49,12 @@ export default function AIVisibilityPage() {
   const { data: businesses } = useQuery({
     queryKey: ['businesses'],
     queryFn:  () => bizApi.list().then(r => r.data.businesses),
-    onSuccess: (d: any[]) => { if (d?.length && !selectedBizId) setSelectedBizId(d[0].id); },
   });
+ 
+  // React Query v5 removed onSuccess from useQuery — use useEffect instead
+  useEffect(() => {
+    if (businesses?.length && !selectedBizId) setSelectedBizId(businesses[0].id);
+  }, [businesses]);
 
   const bizId = selectedBizId || businesses?.[0]?.id || '';
 

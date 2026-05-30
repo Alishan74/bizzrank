@@ -1576,6 +1576,90 @@ export class AIVisibilityService {
   }
 
   // ── Get configured platforms ──────────────────────────────────
+  /**
+   * getLatestScore — returns the shape the /status route expects.
+   * The route uses: { latest, previous, history, trend, comparison }
+   * This wraps getLatestReport and adds trend calculation.
+   */
+  async getLatestScore(businessId: string, userId: string): Promise<{
+    latest:   any | null;
+    previous: any | null;
+    history:  any[];
+    trend:    'improving' | 'stable' | 'declining';
+  }> {
+    const { data: history } = await db.from('ai_visibility_results')
+      .select('*')
+      .eq('business_id', businessId)
+      .eq('user_id', userId)
+      .order('checked_at', { ascending: false })
+      .limit(8);
+ 
+    const latest   = history?.[0]  ?? null;
+    const previous = history?.[1]  ?? null;
+ 
+    let trend: 'improving' | 'stable' | 'declining' = 'stable';
+    if (latest && previous) {
+      const diff = (latest.overall_score ?? 0) - (previous.overall_score ?? 0);
+      if (diff > 5)  trend = 'improving';
+      if (diff < -5) trend = 'declining';
+    }
+ 
+    return { latest, previous, history: history ?? [], trend };
+  }
+ 
+  /**
+   * getCompetitorComparison — derives competitor AI visibility
+   * from the raw_results already stored on the latest check.
+   * No new API calls — reads from DB only.
+   */
+  async getCompetitorComparison(businessId: string, userId: string): Promise<{
+    business:    { name: string; score: number };
+    competitors: Array<{ name: string; score: number; placeId: string }>;
+  }> {
+    const { data: biz } = await db.from('businesses')
+      .select('name').eq('id', businessId).single();
+ 
+    const { data: latest } = await db.from('ai_visibility_results')
+      .select('overall_score, prompt_results')
+      .eq('business_id', businessId)
+      .eq('user_id', userId)
+      .order('checked_at', { ascending: false })
+      .limit(1).single();
+ 
+    const { data: comps } = await db.from('competitors')
+      .select('id, name, google_place_id')
+      .eq('business_id', businessId).neq('is_active', false);
+ 
+    const promptResults: any[] = latest?.prompt_results ?? [];
+    const totalPrompts = promptResults.length;
+ 
+    const competitorScores = (comps ?? []).map((c: any) => {
+      // Count how often this competitor appeared in raw results
+      const appearances = promptResults.filter((r: any) =>
+        (r.competitorsMentioned ?? []).some((m: string) =>
+          m.toLowerCase().includes(c.name.toLowerCase())
+        )
+      ).length;
+      const score = totalPrompts > 0
+        ? Math.round((appearances / totalPrompts) * 100) : 0;
+      return { name: c.name, score, placeId: c.google_place_id ?? '' };
+    });
+ 
+    return {
+      business:    { name: biz?.name ?? '', score: latest?.overall_score ?? 0 },
+      competitors: competitorScores.sort((a, b) => b.score - a.score),
+    };
+  }
+ 
+  /**
+   * runManualCheck — on-demand check triggered by the /check endpoint.
+   * Identical to runWeeklyCheck — the distinction is credits are
+   * deducted in the route before this is called.
+   */
+  async runManualCheck(businessId: string, userId: string): Promise<AIVisibilityReport | null> {
+    return this.runWeeklyCheck(businessId, userId);
+  }
+ 
   getConfiguredPlatforms(): AIPlatform[] { return getActivePlatforms(); }
 
   // ── Extract themes from recent reviews ───────────────────────

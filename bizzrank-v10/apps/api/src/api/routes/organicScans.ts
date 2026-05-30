@@ -13,6 +13,18 @@ import { redis } from '../../infrastructure/cache/RedisClient.js';
 import { billingService, CREDIT_COSTS } from '../../domains/billing/BillingService.js';
 import { NoLocationError, NoScanPointsError, RateLimitError } from '../../shared/errors/DomainErrors.js';
 import { logger } from '../../infrastructure/logger/Logger.js';
+import { z } from 'zod';
+ 
+// Input schema — validates before anything reaches DataForSEO
+const CreateScanSchema = z.object({
+  businessId:       z.string().uuid(),
+  keyword:          z.string().min(1).max(200).trim(),
+  targetingMethod:  z.enum(['auto_grid', 'addresses', 'zip_codes']),
+  radiusKm:         z.coerce.number().min(0.5).max(50).optional(),
+  gridSize:         z.coerce.number().int().min(3).max(7).optional(),
+  inputAddresses:   z.array(z.string().max(500)).max(9).optional(),
+  inputZipCodes:    z.array(z.string().max(20)).max(6).optional(),
+});
 
 const router = Router();
 
@@ -77,7 +89,11 @@ router.get('/:scanId/progress', requireAuth, async (req: AuthRequest, res: Respo
 
 router.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { businessId, keyword, targetingMethod, radiusKm, gridSize, inputAddresses, inputZipCodes } = req.body;
+    const parsed = CreateScanSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0]?.message ?? 'Invalid input' });
+    }
+    const { businessId, keyword, targetingMethod, radiusKm, gridSize, inputAddresses, inputZipCodes } = parsed.data;
     if (!businessId || !keyword || !targetingMethod) {
       return res.status(400).json({ error: 'businessId, keyword and targetingMethod required' });
     }

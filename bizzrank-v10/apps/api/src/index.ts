@@ -12,6 +12,7 @@ import { weeklyScheduler } from './domains/scheduling/WeeklyScheduler.js';
 import { leaderboardService } from './domains/leaderboard/LeaderboardService.js';
 import { reviewIntelligenceService } from './domains/reviews/ReviewIntelligenceService.js';
 import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
 
 import authRoutes           from './api/routes/auth.js';
 import businessRoutes       from './api/routes/businesses.js';
@@ -32,6 +33,10 @@ import gbpGuardRoutes      from './api/routes/gbpGuard.js';
 import aiVisibilityRoutes  from './api/routes/aiVisibility.js';
 
 const app = express();
+
+// Security headers — prevent clickjacking, XSS, MIME sniffing, etc.
+// Also removes X-Powered-By: Express (advertises attack surface)
+app.use(helmet());
 // CORS: lock to specific frontend domain in production
 // PREVIOUSLY: origin:'*' — any website could make authenticated requests
 // NOW: reads from FRONTEND_URL env var, falls back to localhost for dev

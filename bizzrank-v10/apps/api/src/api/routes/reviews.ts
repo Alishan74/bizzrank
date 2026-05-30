@@ -1,9 +1,12 @@
 import { Router } from 'express';
+import { canUseAiReplies } from '../../domains/billing/BillingService.js';
 import { supabase } from '../../infrastructure/database/SupabaseClient.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
 import { generateReviewReply, generateBatchReplies, estimateRevenueLost } from '../../domains/reviews/GeminiService.js';
 import { fetchGBPReviews, postGBPReply } from '../../domains/identity/GBPService.js';
 import { serpFetchReviews, hasSerpApiKey } from '../../domains/serpapi/SerpApiService.js';
+import { canUseAiReplies } from '../../domains/billing/BillingService.js';
+import { canUseAiReplies } from '../../domains/billing/BillingService.js';
 
 const router = Router();
 

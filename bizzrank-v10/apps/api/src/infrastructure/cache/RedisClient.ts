@@ -1,28 +1,10 @@
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import 'dotenv/config';
-
-// Upstash requires TLS — use rediss:// protocol
-const redisUrl = process.env.REDIS_URL!;
-
-// Shared Redis instance for caching and rate limiting
-export const redis = new Redis(redisUrl, {
-  tls: {},
-  maxRetriesPerRequest: 3,
-  retryStrategy: (times) => {
-    if (times > 3) return null;
-    return Math.min(times * 200, 2000);
-  },
-  lazyConnect: false,
-});
-
-redis.on('connect', () => console.log('[Redis] Connected to Upstash'));
-redis.on('error', (err) => console.error('[Redis] Error:', err.message));
-
-// Separate connection for BullMQ — BullMQ requires its own connection
-export function createBullMQConnection() {
-  return new Redis(redisUrl, {
-    tls: {},
-    maxRetriesPerRequest: null, // Required by BullMQ
-    enableReadyCheck: false,    // Required by BullMQ
-  });
-}
+const redisUrl = process.env.REDIS_URL;
+if (!redisUrl) throw new Error('[Redis] REDIS_URL not set');
+const isTLS = redisUrl.startsWith('rediss://');
+const tlsOpt = isTLS ? {} : { tls: {} };
+export const redis = new Redis(redisUrl, { ...tlsOpt, maxRetriesPerRequest: 3, retryStrategy: (times: number) => { if (times > 3) return null; return Math.min(times * 200, 2000); }, lazyConnect: false });
+redis.on('connect', () => console.log('[Redis] Connected'));
+redis.on('error', (e: Error) => console.error('[Redis] Error:', e.message));
+export function createBullMQConnection(): Redis { return new Redis(redisUrl as string, { ...tlsOpt, maxRetriesPerRequest: null, enableReadyCheck: false }); }

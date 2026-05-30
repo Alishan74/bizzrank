@@ -3,6 +3,18 @@ import { supabase } from '../../infrastructure/database/SupabaseClient.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
 import { getPlaceAutocomplete, getPlaceDetails } from '../../domains/identity/GoogleMapsService.js';
 import { businessLimit } from '../../domains/billing/BillingService.js';
+import { z } from 'zod';
+const CreateBizSchema = z.object({
+  name:         z.string().min(1).max(200).trim(),
+  address:      z.string().max(500).optional(),
+  latitude:     z.number().min(-90).max(90),
+  longitude:    z.number().min(-180).max(180),
+  phone:        z.string().max(30).optional().nullable(),
+  website:      z.string().url().max(500).optional().nullable(),
+  category:     z.string().max(200).optional().nullable(),
+  googlePlaceId: z.string().max(200).optional().nullable(),
+  openingHours: z.any().optional(),
+});
 const router = Router();
 
 router.get('/', requireAuth, async (req: AuthRequest, res) => {
@@ -25,7 +37,11 @@ router.get('/place/:placeId', requireAuth, async (req, res) => {
 });
 
 router.post('/', requireAuth, async (req: AuthRequest, res) => {
-  const { name, address, latitude, longitude, phone, website, category, googlePlaceId, openingHours } = req.body;
+  const parsed = CreateBizSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.errors[0]?.message ?? 'Invalid input' });
+  }
+  const { name, address, latitude, longitude, phone, website, category, googlePlaceId, openingHours } = parsed.data;
   if (!name) return res.status(400).json({ error: 'Business name required' });
   if (!latitude || !longitude) return res.status(400).json({ error: 'Please select your business from Google Maps suggestions to set the location automatically' });
   const { data: profile } = await supabase.from('profiles')
@@ -72,16 +88,31 @@ router.patch('/:id/hours', requireAuth, async (req: AuthRequest, res) => {
 router.post('/import-gbp', requireAuth, async (req: AuthRequest, res) => {
   const { locationIds } = req.body;
   if (!locationIds?.length) return res.status(400).json({ error: 'No locations selected' });
-  const { data: profile } = await supabase.from('profiles').select('plan').eq('id', req.userId!).single();
+  const { data: profile } = await supabase.from('profiles')
+    .select('plan, current_org_id').eq('id', req.userId!).single();
   const limit = businessLimit(profile?.plan ?? 'starter');
   const { count: existing } = await supabase.from('businesses').select('*', { count: 'exact', head: true }).eq('user_id', req.userId!).neq('is_active', false);
   const canAdd = limit === 999 ? locationIds.length : Math.max(0, limit - (existing ?? 0));
   if (canAdd === 0) return res.status(403).json({ error: 'Business limit reached for your plan', limitReached: true });
+ 
+  // org_id required after RBAC migration — look up once before the import loop
+  let importOrgId = profile?.current_org_id;
+  if (!importOrgId) {
+    const { data: org } = await supabase.from('organizations')
+      .select('id').eq('owner_id', req.userId!).limit(1).single();
+    importOrgId = org?.id;
+  }
+  if (!importOrgId) return res.status(400).json({ error: 'No organization found for this account' });
+ 
   const { data: pending } = await supabase.from('gbp_pending_locations').select('locations').eq('user_id', req.userId!).single();
   const toImport = (pending?.locations ?? []).filter((l: any) => locationIds.includes(l.gbpLocationId)).slice(0, canAdd);
   const imported = [];
   for (const loc of toImport) {
-    const { data: biz } = await supabase.from('businesses').insert({ user_id: req.userId, name: loc.name, address: loc.address, latitude: loc.latitude, longitude: loc.longitude, phone: loc.phone, website: loc.website, category: loc.category, gbp_location_id: loc.gbpLocationId }).select().single();
+    const { data: biz } = await supabase.from('businesses').insert({
+      user_id: req.userId, org_id: importOrgId,
+      name: loc.name, address: loc.address, latitude: loc.latitude, longitude: loc.longitude,
+      phone: loc.phone, website: loc.website, category: loc.category, gbp_location_id: loc.gbpLocationId,
+    }).select().single();
     if (biz?.id) imported.push(biz);
   }
   await supabase.from('gbp_pending_locations').delete().eq('user_id', req.userId!);

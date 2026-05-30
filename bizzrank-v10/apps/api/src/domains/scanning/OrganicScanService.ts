@@ -54,7 +54,7 @@ export class OrganicScanService {
     // (expected — tasks are queued, not returned synchronously)
     const totalResults = [...organic.values()].reduce((s, r) => s + r.length, 0);
 
-    if (isAutomatedScan && totalResults === 0) {
+    if (isAutomated && totalResults === 0) {
       // All results are empty — Standard Queue tasks posted but not yet processed.
       // Mark as pending_collect. The collect cron will call processFromCache()
       // after results are ready. Do NOT write 0-score data to DB.

@@ -105,25 +105,38 @@ export class WeeklyScheduler {
 
   async runWeeklyAIVisibilityChecks(): Promise<void> {
     logger.info('[Scheduler] AI Visibility weekly checks start');
-    const { data: profiles } = await db.from('profiles').select('id, plan');
-    if (!profiles?.length) return;
+    // FIXED: paginate — Supabase silently truncates at 1000 rows if no range()
+    const BATCH = 50;
+    let offset  = 0;
     let checked = 0;
-    for (const p of profiles) {
-      try {
-        const { data: bizs } = await db.from('businesses')
-          .select('id').eq('user_id', p.id).neq('is_active', false);
-        for (const b of (bizs ?? [])) {
-          await aiVisibilityService.runWeeklyCheck(b.id, p.id)
-            .catch(e => logger.error('[Scheduler] AI Visibility failed', { bizId: b.id, error: e.message }));
-          // Stagger 5s between businesses to respect AI API rate limits
-          // Previously 2s — not enough for high user counts
-          await new Promise(r => setTimeout(r, 5000));
-          checked++;
+ 
+    while (true) {
+      const { data: profiles } = await db.from('profiles')
+        .select('id, plan').range(offset, offset + BATCH - 1);
+ 
+      if (!profiles?.length) break;
+ 
+      for (const p of profiles) {
+        try {
+          const { data: bizs } = await db.from('businesses')
+            .select('id').eq('user_id', p.id).neq('is_active', false);
+          for (const b of (bizs ?? [])) {
+            await aiVisibilityService.runWeeklyCheck(b.id, p.id)
+              .catch(e => logger.error('[Scheduler] AI Visibility failed', { bizId: b.id, error: e.message }));
+            // 5s stagger — respects AI API rate limits
+            await new Promise(r => setTimeout(r, 5000));
+            checked++;
+          }
+        } catch (e: any) {
+          logger.error('[Scheduler] AI Visibility profile failed', { profileId: p.id, error: e.message });
         }
-      } catch (e: any) {
-        logger.error('[Scheduler] AI Visibility profile failed', { profileId: p.id, error: e.message });
       }
+ 
+      if (profiles.length < BATCH) break;
+      offset += BATCH;
+      await new Promise(r => setTimeout(r, 500)); // pause between batches
     }
+ 
     logger.info('[Scheduler] AI Visibility checks done', { checked });
   }
 

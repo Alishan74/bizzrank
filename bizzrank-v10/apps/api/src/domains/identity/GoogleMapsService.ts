@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import 'dotenv/config';
 const KEY = process.env.GOOGLE_MAPS_API_KEY!;
 const CID = process.env.GOOGLE_OAUTH_CLIENT_ID!;
@@ -45,7 +46,16 @@ export function getGBPAuthUrl(userId: string) {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   url.searchParams.set('client_id', CID); url.searchParams.set('redirect_uri', RDR); url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', 'https://www.googleapis.com/auth/business.manage https://www.googleapis.com/auth/userinfo.email');
-  url.searchParams.set('access_type', 'offline'); url.searchParams.set('prompt', 'consent'); url.searchParams.set('state', userId);
+  // CSRF fix: use random state token instead of userId
+  // State token → Redis (5 min TTL), verified on callback
+  const stateToken = crypto.randomBytes(32).toString('hex');
+  // Store mapping: state → userId in Redis (imported lazily to avoid circular dep)
+  import('../../infrastructure/cache/RedisClient.js').then(({ redis }) => {
+    redis.setex('gbp:state:' + stateToken, 300, userId).catch(() => {});
+  });
+  url.searchParams.set('access_type', 'offline');
+  url.searchParams.set('prompt', 'consent');
+  url.searchParams.set('state', stateToken);
   return url.toString();
 }
 
