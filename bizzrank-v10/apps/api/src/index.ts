@@ -32,6 +32,7 @@ import customScanRoutes     from './api/routes/customScans.js';
 import gbpGuardRoutes      from './api/routes/gbpGuard.js';
 import aiVisibilityRoutes  from './api/routes/aiVisibility.js';
 import billingRoutes      from './api/routes/billing.js';
+import agencyRoutes from './api/routes/agency.js';
 
 const app = express();
 
@@ -60,7 +61,10 @@ app.use(cors({
     if (allowedOrigins.has(origin)) return callback(null, true);
     // Dev mode: allow any localhost/127.0.0.1 origin
     if (process.env.NODE_ENV !== 'production' &&
-        (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:'))) {
+        (origin.startsWith('http://localhost:') ||
+         origin.startsWith('https://localhost:') ||
+         origin.startsWith('http://127.0.0.1:') ||
+         origin.includes('.app.github.dev'))) {
       return callback(null, true);
     }
     callback(new Error(`CORS: origin "${origin}" not allowed`));
@@ -80,7 +84,6 @@ const authLimiter = rateLimit({
 // General API: 300 requests per minute per user
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000, max: 300,
-  keyGenerator: (req: any) => req.headers.authorization?.slice(-12) ?? req.ip,
   message: { error: 'Rate limit exceeded — please slow down' },
   standardHeaders: true, legacyHeaders: false,
   skip: () => process.env.NODE_ENV !== 'production',
@@ -227,7 +230,9 @@ function start() {
   startReviewWorker();
   startCronJobs();
   const PORT = parseInt(process.env.PORT ?? '3000');
-  app.listen(PORT, '0.0.0.0', () => {
+  app.use('/api/agency', agencyRoutes);
+
+app.listen(PORT, '0.0.0.0', () => {
     logger.info(`BizzRank AI v10 on port ${PORT}`);
     logger.info('Workers: scans(10) · ad-slots(20) · reviews(50)');
     logger.info('Crons: L2@01:00 · Collect@01:30 · L3@Mon02:00 · Reviews@04:00 · Credits@1st');
