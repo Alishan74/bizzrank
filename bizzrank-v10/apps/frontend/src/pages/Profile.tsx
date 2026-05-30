@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { authApi, profileApi } from '../lib/api';
+import { authApi, profileApi, billingApi } from '../lib/api';
 
 // ── FINAL plan config — matches BillingService.ts exactly ─────
 const PLANS: Record<string, any> = {
@@ -245,7 +245,7 @@ export default function ProfilePage() {
           {/* Available plans */}
           <div className="card">
             <h3 className="font-bold mb-1">Available Plans</h3>
-            <p className="text-sm text-gray-400 mb-4">Contact support to upgrade: support@bizzrank.ai</p>
+            <p className="text-sm text-gray-400 mb-4">Choose a plan below to upgrade instantly.</p>
             <div className="space-y-3">
               {Object.entries(PLANS)
                 .filter(([k]) => !['professional'].includes(k))
@@ -268,8 +268,8 @@ export default function ProfilePage() {
                         </div>
                       </div>
                       {isCurrent
-                        ? <span className="text-xs font-semibold text-brand-600 bg-brand-100 px-2 py-1 rounded-full">Current</span>
-                        : <span className="text-xs font-semibold text-brand-600">Upgrade →</span>
+                        ? <div className="flex gap-2 items-center"><span className="text-xs font-semibold text-brand-600 bg-brand-100 px-2 py-1 rounded-full">Current</span>{planKey !== 'starter' && <button onClick={async () => { try { const r = await billingApi.portal(); window.location.href = r.data.url; } catch(e:any){alert('Billing portal failed');} }} className="text-xs text-gray-500 hover:underline">Manage billing</button>}</div>
+                        : <button onClick={async () => { try { const r = await billingApi.checkout(key); window.location.href = r.data.url; } catch(e:any) { alert(e.response?.data?.error ?? 'Failed to start checkout'); } }} className="text-xs font-semibold text-brand-600 hover:underline">Upgrade →</button>
                       }
                     </div>
                   );

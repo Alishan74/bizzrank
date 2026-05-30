@@ -194,3 +194,14 @@ export const aiVisibilityApi = {
   citations:       (businessId: string) => api.get('/ai-visibility/citations?businessId=' + businessId),
   citationSources: (sector: string)     => api.get('/ai-visibility/citation-sources?sector=' + sector),
 };
+
+export const agencyApi = {
+  overview: () => api.get('/agency/overview'),
+  signals:  () => api.get('/agency/signals'),
+};
+
+export const billingApi = {
+  status:   ()           => api.get('/billing/status'),
+  checkout: (plan: string) => api.post('/billing/checkout', { plan }),
+  portal:   ()           => api.post('/billing/portal'),
+};

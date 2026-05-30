@@ -31,6 +31,7 @@ import reviewIntelRoutes    from './api/routes/reviewIntelligence.js';
 import customScanRoutes     from './api/routes/customScans.js';
 import gbpGuardRoutes      from './api/routes/gbpGuard.js';
 import aiVisibilityRoutes  from './api/routes/aiVisibility.js';
+import billingRoutes      from './api/routes/billing.js';
 
 const app = express();
 
@@ -106,6 +107,7 @@ app.use('/api/review-intelligence', reviewIntelRoutes);
 app.use('/api/custom-scans',        customScanRoutes);
 app.use('/api/gbp-guard',           gbpGuardRoutes);
 app.use('/api/ai-visibility',        aiVisibilityRoutes);
+app.use('/api/billing',             billingRoutes);
 
 try {
   const { default: configRoutes } = await import('./api/routes/config.js');

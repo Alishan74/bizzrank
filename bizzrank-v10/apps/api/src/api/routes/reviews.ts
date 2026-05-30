@@ -4,9 +4,8 @@ import { supabase } from '../../infrastructure/database/SupabaseClient.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
 import { generateReviewReply, generateBatchReplies, estimateRevenueLost } from '../../domains/reviews/GeminiService.js';
 import { fetchGBPReviews, postGBPReply } from '../../domains/identity/GBPService.js';
+import { decryptToken } from '../../shared/utils/tokenEncryption.js';
 import { serpFetchReviews, hasSerpApiKey } from '../../domains/serpapi/SerpApiService.js';
-import { canUseAiReplies } from '../../domains/billing/BillingService.js';
-import { canUseAiReplies } from '../../domains/billing/BillingService.js';
 
 const router = Router();
 
@@ -80,7 +79,7 @@ router.post('/fetch', requireAuth, async (req: AuthRequest, res) => {
   // Try GBP first if connected
   if (profile?.gbp_connected && profile?.gbp_access_token && biz.gbp_location_id) {
     source = 'gbp';
-    const gbpReviews = await fetchGBPReviews(profile.gbp_access_token, biz.gbp_location_id);
+    const gbpReviews = await fetchGBPReviews(decryptToken(profile.gbp_access_token), biz.gbp_location_id);
     for (const rev of gbpReviews) {
       await supabase.from('reviews').upsert({
         user_id: req.userId, business_id: businessId,
@@ -205,7 +204,7 @@ router.post('/:reviewId/approve', requireAuth, async (req: AuthRequest, res) => 
   const { data: profile } = await supabase.from('profiles').select('gbp_access_token, gbp_connected').eq('id', req.userId!).single();
 
   if (profile?.gbp_connected && profile?.gbp_access_token && review.businesses?.gbp_location_id && review.google_review_id) {
-    posted = await postGBPReply(profile.gbp_access_token, review.businesses.gbp_location_id, review.google_review_id, replyText);
+    posted = await postGBPReply(decryptToken(profile.gbp_access_token), review.businesses.gbp_location_id, review.google_review_id, replyText);
   }
 
   await supabase.from('reviews').update({

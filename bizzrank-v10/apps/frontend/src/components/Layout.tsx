@@ -20,9 +20,11 @@ import ProfilePage         from '../pages/Profile';
 import AIVisibilityPage    from '../pages/AIVisibility';
 import CustomScanPage      from '../pages/CustomScan';
 import GBPGuardPage        from '../pages/GBPGuard';
+import AgencyDashboard     from '../pages/AgencyDashboard';
 
 const NAV = [
   { path: '/overview',   icon: '▦',  label: 'Overview' },
+  { path: '/agency',     icon: '🏢', label: 'Agency Dashboard' },
   { path: '/ai-visibility',icon: '🤖', label: 'AI Visibility' },
   { path: '/organic',    icon: '🔍', label: 'Organic Visibility' },
   { path: '/ad-insights',icon: '📢', label: 'Ad Insights & Pressure' },
@@ -367,6 +369,7 @@ export default function Layout() {
               <Route path="/ai-visibility"          element={<AIVisibilityPage />} />
               <Route path="/custom-scan"          element={<CustomScanPage />} />
               <Route path="/gbp-guard"            element={<GBPGuardPage />} />
+              <Route path="/agency"              element={<AgencyDashboard />} />
               <Route path="*"                       element={<Navigate to="/overview" replace />} />
             </Routes>
           </div>
