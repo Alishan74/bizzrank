@@ -195,13 +195,25 @@ export const aiVisibilityApi = {
   citationSources: (sector: string)     => api.get('/ai-visibility/citation-sources?sector=' + sector),
 };
 
-export const agencyApi = {
-  overview: () => api.get('/agency/overview'),
-  signals:  () => api.get('/agency/signals'),
-};
 
 export const billingApi = {
   status:   ()           => api.get('/billing/status'),
   checkout: (plan: string) => api.post('/billing/checkout', { plan }),
   portal:   ()           => api.post('/billing/portal'),
+};
+
+export const agencyApi = {
+  dashboard:         ()                       => api.get('/agency/dashboard'),
+  clients:           ()                       => api.get('/agency/clients'),
+  createClient:      (d: any)                 => api.post('/agency/clients', d),
+  getClient:         (id: string)             => api.get('/agency/clients/' + id),
+  updateClient:      (id: string, d: any)     => api.patch('/agency/clients/' + id, d),
+  deleteClient:      (id: string)             => api.delete('/agency/clients/' + id),
+  assignBusiness:    (clientId: string, businessId: string) => api.post('/agency/clients/' + clientId + '/assign-business', { businessId }),
+  unassignBusiness:  (clientId: string, businessId: string) => api.post('/agency/clients/' + clientId + '/unassign-business', { businessId }),
+  addNote:           (clientId: string, note: string) => api.post('/agency/clients/' + clientId + '/notes', { note }),
+  workQueue:         ()                       => api.get('/agency/work-queue'),
+  resolveTask:       (id: string)             => api.post('/agency/work-queue/' + id + '/resolve'),
+  generateTasks:     ()                       => api.post('/agency/work-queue/generate'),
+  credits:           ()                       => api.get('/agency/credits'),
 };
