@@ -11,7 +11,12 @@ function GBPModal({ onClose, onAdded }: any) {
   const [selected, setSelected] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
-  const limitMap: Record<string, number> = { starter: 1, professional: 5, agency: 999, enterprise: 999 };
+  // FIXED: was hardcoded wrong (missing growth/pro, agency was 999 not 5)
+  // Now matches BillingService.PLANS exactly
+  const limitMap: Record<string, number> = {
+    starter: 1, growth: 1, pro: 2, agency: 5,
+    professional: 5, enterprise: 999,
+  };
   const limit = limitMap[me?.plan ?? 'starter'] ?? 1;
 
   function toggle(id: string) {

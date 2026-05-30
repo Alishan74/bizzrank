@@ -50,6 +50,24 @@ export class OrganicScanService {
       if (i + BATCH < points.length) await new Promise(r => setTimeout(r, 400));
     }
 
+    // Check if Standard Queue returned all empty results
+    // (expected — tasks are queued, not returned synchronously)
+    const totalResults = [...organic.values()].reduce((s, r) => s + r.length, 0);
+
+    if (isAutomatedScan && totalResults === 0) {
+      // All results are empty — Standard Queue tasks posted but not yet processed.
+      // Mark as pending_collect. The collect cron will call processFromCache()
+      // after results are ready. Do NOT write 0-score data to DB.
+      await db.from('organic_scans').update({
+        state: 'pending_collect',
+        points_completed: 0,
+      }).eq('id', scanId);
+      await releaseScanSlot(userId);
+      logger.info('[Scan] Automated scan queued for collect', { scanId, keyword });
+      return;
+    }
+
+    // Results available (either Live/Priority Queue, or Standard Queue cache hit)
     await this.saveRankings(scanId, userId, businessId, keyword, today, points, organic);
     await this.saveSponsored(scanId, userId, businessId, keyword, today, sponsored);
 
@@ -80,6 +98,94 @@ export class OrganicScanService {
     this.saveDiscovered(organic).catch(console.error);
     await releaseScanSlot(userId);
     logger.info('[Scan] Complete', { scanId, score: clientScore.visibilityScore });
+  }
+
+
+  /**
+   * Called by the collect cron after Standard Queue results are ready.
+   * Finds all scans in 'pending_collect' state and processes them
+   * from the shared scan result cache (warmed by collectPendingTasks).
+   *
+   * This is the fix for the automated L2 race condition:
+   * Standard Queue → posts tasks → returns empty → scan marked pending_collect
+   * Collect cron → fetches results → warms cache → calls processFromCache
+   * processFromCache → reads cache → saves real rankings to DB
+   */
+  async processFromCache(): Promise<{ processed: number; skipped: number }> {
+    const { data: pendingScans } = await db.from('organic_scans')
+      .select('id, user_id, business_id, keyword, target_lat, target_lng, scan_points, competitors, client_google_place_id')
+      .eq('state', 'pending_collect')
+      .order('created_at', { ascending: true })
+      .limit(50);
+
+    if (!pendingScans?.length) return { processed: 0, skipped: 0 };
+
+    let processed = 0, skipped = 0;
+    const today = new Date().toISOString().split('T')[0];
+
+    for (const scan of pendingScans) {
+      try {
+        const points: ScanPoint[] = scan.scan_points ?? [];
+        if (!points.length) { skipped++; continue; }
+
+        const { getSharedScanResult } = await import('../../infrastructure/cache/CacheService.js');
+        const organic  = new Map<number, any[]>();
+        const sponsored = new Map<number, any[]>();
+        let anyResults = false;
+
+        for (const pt of points) {
+          const cached = await getSharedScanResult(pt.lat, pt.lng, scan.keyword, today);
+          if (cached) {
+            organic.set(pt.index, cached.organic ?? []);
+            sponsored.set(pt.index, cached.sponsored ?? []);
+            if ((cached.organic?.length ?? 0) > 0) anyResults = true;
+          }
+        }
+
+        if (!anyResults) { skipped++; continue; } // results not ready yet
+
+        await this.saveRankings(scan.id, scan.user_id, scan.business_id, scan.keyword, today, points, organic);
+        await this.saveSponsored(scan.id, scan.user_id, scan.business_id, scan.keyword, today, sponsored);
+
+        const clientScore = this.buildScore(scan.client_google_place_id, 'Your Business', true, points, organic);
+        const competitors: Array<{ googlePlaceId: string | null; name: string }> = scan.competitors ?? [];
+        const competitorScores = competitors.map(c => this.buildScore(c.googlePlaceId, c.name, false, points, organic));
+
+        await db.from('organic_scores').insert({
+          scan_id: scan.id, user_id: scan.user_id, business_id: scan.business_id,
+          keyword: scan.keyword, scan_date: today,
+          organic_visibility_score:    clientScore.visibilityScore,
+          organic_avg_ranking:         clientScore.avgRanking,
+          organic_territory_dominance: clientScore.territoryDominance,
+          organic_total_cells:         points.length,
+          organic_ranked_cells:        clientScore.rankedCells,
+          organic_top3_cells:          clientScore.top3Cells,
+          organic_top10_cells:         clientScore.top10Cells,
+          organic_heatmap_points:      clientScore.heatmapPoints,
+          competitor_scores:           competitorScores,
+        });
+
+        await db.from('organic_scans').update({
+          state: 'completed',
+          points_completed: points.length,
+          completed_at: new Date().toISOString(),
+        }).eq('id', scan.id);
+
+        eventBus.publish(Events.SCAN_ORGANIC_COMPLETED, {
+          scanId: scan.id, userId: scan.user_id, businessId: scan.business_id,
+          keyword: scan.keyword, score: clientScore.visibilityScore,
+          clientGooglePlaceId: scan.client_google_place_id,
+        });
+
+        processed++;
+        logger.info('[Scan] processFromCache complete', { scanId: scan.id, score: clientScore.visibilityScore });
+      } catch (err: any) {
+        logger.error('[Scan] processFromCache failed', { scanId: scan.id, error: err.message });
+        skipped++;
+      }
+    }
+
+    return { processed, skipped };
   }
 
   private buildScore(placeId: string | null, name: string, isClient: boolean,

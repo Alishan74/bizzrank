@@ -256,13 +256,17 @@ export class OrgService {
   // PLAN DEFAULTS
   // ─────────────────────────────────────────────────────────
 
+  // FIXED: was completely wrong — starter had 100 credits, agency had 2000.
+  // Now matches BillingService.PLANS exactly. Single source of truth.
   private planDefaults(plan: string): { credits: number; maxBusinesses: number; maxUsers: number } {
     switch (plan) {
-      case 'professional': return { credits: 300,   maxBusinesses: 5,   maxUsers: 3   };
-      case 'agency':       return { credits: 2000,  maxBusinesses: 999, maxUsers: 20  };
-      case 'enterprise':   return { credits: 10000, maxBusinesses: 999, maxUsers: 999 };
-      case 'starter':
-      default:             return { credits: 100,   maxBusinesses: 1,   maxUsers: 1   };
+      case 'starter':      return { credits: 900,   maxBusinesses: 1,   maxUsers: 1   };
+      case 'growth':       return { credits: 1600,  maxBusinesses: 1,   maxUsers: 3   };
+      case 'pro':          return { credits: 1800,  maxBusinesses: 2,   maxUsers: 5   };
+      case 'professional': return { credits: 1800,  maxBusinesses: 5,   maxUsers: 5   };
+      case 'agency':       return { credits: 3500,  maxBusinesses: 5,   maxUsers: 20  };
+      case 'enterprise':   return { credits: 99999, maxBusinesses: 999, maxUsers: 999 };
+      default:             return { credits: 900,   maxBusinesses: 1,   maxUsers: 1   };
     }
   }
 }

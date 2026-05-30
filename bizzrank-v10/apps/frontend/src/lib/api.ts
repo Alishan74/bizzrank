@@ -148,7 +148,7 @@ export function subscribeScanProgress(
   onProgress: (data: any) => void,
   onComplete: () => void
 ): () => void {
-  const es = new EventSource('/api/organic-scans/' + scanId + '/progress');
+  const es = new EventSource('/api/organic-scans/' + scanId + '/progress' + '?token=' + (localStorage.getItem('token') ?? ''));
   es.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);

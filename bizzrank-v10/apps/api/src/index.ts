@@ -35,19 +35,29 @@ const app = express();
 // CORS: lock to specific frontend domain in production
 // PREVIOUSLY: origin:'*' — any website could make authenticated requests
 // NOW: reads from FRONTEND_URL env var, falls back to localhost for dev
-const allowedOrigins = [
-  process.env.FRONTEND_URL ?? 'http://localhost:5173',
-  'http://localhost:5173',
-  'http://localhost:3000',
-];
+// CORS: exact origin match only — no startsWith
+// startsWith was vulnerable to lookalike domains:
+//   FRONTEND_URL = https://app.bizzrank.ai
+//   https://app.bizzrank.ai.evil.com → would pass startsWith → BLOCKED now
+const allowedOrigins = new Set([
+  process.env.FRONTEND_URL,            // production frontend
+  'http://localhost:5173',             // Vite dev server
+  'http://localhost:3000',             // alt dev port
+  'http://127.0.0.1:5173',            // explicit loopback
+].filter(Boolean) as string[]);
+
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, Postman, same-origin)
+    // Allow requests with no origin (Postman, curl, server-to-server)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.some(o => origin.startsWith(o))) return callback(null, true);
-    // In development, allow all
-    if (process.env.NODE_ENV !== 'production') return callback(null, true);
-    callback(new Error('Not allowed by CORS'));
+    // Exact match only
+    if (allowedOrigins.has(origin)) return callback(null, true);
+    // Dev mode: allow any localhost/127.0.0.1 origin
+    if (process.env.NODE_ENV !== 'production' &&
+        (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:'))) {
+      return callback(null, true);
+    }
+    callback(new Error(`CORS: origin "${origin}" not allowed`));
   },
   credentials: true,
 }));
@@ -112,6 +122,7 @@ function startCronJobs(): void {
   }, { timezone: 'UTC' });
 
   // Collect DataForSEO Standard Queue results (30min after posting)
+  // After collecting, processFromCache() writes rankings for pending_collect scans
   cron.schedule('30 1 * * *', async () => {
     logger.info('[Cron] Collecting Standard Queue results');
     try {
@@ -119,6 +130,10 @@ function startCronJobs(): void {
       if (typeof mod.collectPendingTasks === 'function') {
         const stats = await mod.collectPendingTasks();
         logger.info('[Cron] Collect done', stats);
+        // Process pending_collect scans from warmed cache
+        const { organicScanService } = await import('./domains/scanning/OrganicScanService.js');
+        const pfc = await organicScanService.processFromCache();
+        logger.info('[Cron] processFromCache done', pfc);
       }
     } catch (e: any) { logger.error('[Cron] Collect failed', { error: e.message }); }
   }, { timezone: 'UTC' });

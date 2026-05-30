@@ -28,11 +28,27 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const { name, address, latitude, longitude, phone, website, category, googlePlaceId, openingHours } = req.body;
   if (!name) return res.status(400).json({ error: 'Business name required' });
   if (!latitude || !longitude) return res.status(400).json({ error: 'Please select your business from Google Maps suggestions to set the location automatically' });
-  const { data: profile } = await supabase.from('profiles').select('plan').eq('id', req.userId!).single();
+  const { data: profile } = await supabase.from('profiles')
+    .select('plan, current_org_id').eq('id', req.userId!).single();
   const limit = businessLimit(profile?.plan ?? 'starter');
   const { count } = await supabase.from('businesses').select('*', { count: 'exact', head: true }).eq('user_id', req.userId!).neq('is_active', false);
   if (limit !== 999 && (count ?? 0) >= limit) return res.status(403).json({ error: `Your ${profile?.plan} plan allows ${limit} business${limit === 1 ? '' : 'es'}. Upgrade to add more.`, limitReached: true });
-  const { data, error } = await supabase.from('businesses').insert({ user_id: req.userId, name, address, latitude, longitude, phone, website, category, google_place_id: googlePlaceId, opening_hours: openingHours ?? null }).select().single();
+
+  // org_id is required (NOT NULL after RBAC migration)
+  // Look it up from profile.current_org_id; fall back to owned org
+  let orgId = profile?.current_org_id;
+  if (!orgId) {
+    const { data: org } = await supabase.from('organizations')
+      .select('id').eq('owner_id', req.userId!).limit(1).single();
+    orgId = org?.id;
+  }
+  if (!orgId) return res.status(400).json({ error: 'No organization found. Please complete account setup.' });
+
+  const { data, error } = await supabase.from('businesses').insert({
+    user_id: req.userId, org_id: orgId,
+    name, address, latitude, longitude, phone, website, category,
+    google_place_id: googlePlaceId, opening_hours: openingHours ?? null,
+  }).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.status(201).json(data);
 });

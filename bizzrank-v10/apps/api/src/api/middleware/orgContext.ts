@@ -39,7 +39,7 @@ export async function loadOrgContext(req: OrgRequest, res: Response, next: NextF
       const { data: org } = await supabase
         .from('organizations')
         .select('id')
-        .eq('owner_user_id', req.userId)
+        .eq('owner_id', req.userId)
         .order('created_at', { ascending: true })
         .limit(1)
         .single();
