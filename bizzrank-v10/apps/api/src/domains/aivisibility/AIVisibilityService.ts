@@ -1177,12 +1177,19 @@ export class AIVisibilityService {
 
     if (!biz) { logger.warn('[AIVisibility] Business not found', { businessId }); return null; }
 
-    // Load primary keyword
+    // Load ALL active keywords (up to 4) — previously only first keyword was used
+    // A restaurant with ["pizza","pasta","Italian food"] only got pizza tested before
     const { data: kwRows } = await db.from('business_keywords')
       .select('keyword').eq('business_id', businessId)
-      .eq('is_active', true).order('display_order').limit(1);
-    const keyword = kwRows?.[0]?.keyword;
-    if (!keyword) { logger.info('[AIVisibility] No keywords configured', { businessId }); return null; }
+      .eq('is_active', true).order('display_order').limit(4);
+    if (!kwRows?.length) {
+      logger.info('[AIVisibility] No keywords configured', { businessId });
+      return null;
+    }
+    // Primary keyword drives sector detection and most prompts
+    const keyword = kwRows[0].keyword;
+    // Additional keywords get folded into custom prompt generation
+    const allKeywords = kwRows.map((k: any) => k.keyword);
 
     // Load competitors for mention tracking
     const { data: compRows } = await db.from('competitors')
@@ -1226,7 +1233,7 @@ export class AIVisibilityService {
     // ── Generate Gemini custom prompts ─────────────────────────
     logger.info('[AIVisibility] Generating custom prompts via Gemini', { businessId });
     const customPrompts = await generateCustomPrompts(
-      biz.name, keyword, city, biz.category, reviewThemes
+      biz.name, allKeywords.join(', '), city, biz.category, reviewThemes
     );
 
     // ── Build final structured prompt list ─────────────────────

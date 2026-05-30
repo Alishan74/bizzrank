@@ -10,6 +10,8 @@ import { startReviewWorker } from './domains/reviews/ReviewWorker.js';
 import { startAdSlotWorker } from './domains/adpressure/AdPressureService.js';
 import { weeklyScheduler } from './domains/scheduling/WeeklyScheduler.js';
 import { leaderboardService } from './domains/leaderboard/LeaderboardService.js';
+import { reviewIntelligenceService } from './domains/reviews/ReviewIntelligenceService.js';
+import rateLimit from 'express-rate-limit';
 
 import authRoutes           from './api/routes/auth.js';
 import businessRoutes       from './api/routes/businesses.js';
@@ -30,8 +32,47 @@ import gbpGuardRoutes      from './api/routes/gbpGuard.js';
 import aiVisibilityRoutes  from './api/routes/aiVisibility.js';
 
 const app = express();
-app.use(cors({ origin: '*', credentials: true }));
+// CORS: lock to specific frontend domain in production
+// PREVIOUSLY: origin:'*' — any website could make authenticated requests
+// NOW: reads from FRONTEND_URL env var, falls back to localhost for dev
+const allowedOrigins = [
+  process.env.FRONTEND_URL ?? 'http://localhost:5173',
+  'http://localhost:5173',
+  'http://localhost:3000',
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, Postman, same-origin)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.some(o => origin.startsWith(o))) return callback(null, true);
+    // In development, allow all
+    if (process.env.NODE_ENV !== 'production') return callback(null, true);
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: '10mb' }));
+
+// Rate limiting — prevent abuse
+// Auth endpoints: 20 requests per 15min (prevents brute force)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 20,
+  message: { error: 'Too many requests — please wait 15 minutes' },
+  standardHeaders: true, legacyHeaders: false,
+  skip: () => process.env.NODE_ENV !== 'production',
+});
+// General API: 300 requests per minute per user
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 300,
+  keyGenerator: (req: any) => req.headers.authorization?.slice(-12) ?? req.ip,
+  message: { error: 'Rate limit exceeded — please slow down' },
+  standardHeaders: true, legacyHeaders: false,
+  skip: () => process.env.NODE_ENV !== 'production',
+});
+
+app.use('/api/auth/login',  authLimiter);
+app.use('/api/auth/signup', authLimiter);
+app.use('/api/',            apiLimiter);
 
 app.use('/api/auth',                authRoutes);
 app.use('/api/businesses',          businessRoutes);
@@ -129,6 +170,27 @@ function startCronJobs(): void {
   cron.schedule('0 0 1 * *', async () => {
     logger.info('[Cron] Monthly credit reset');
     await weeklyScheduler.runMonthlyReset().catch(e => logger.error('[Cron] Reset failed', { error: e.message }));
+  }, { timezone: 'UTC' });
+
+  // Review Intelligence weekly refresh: Sunday 2am UTC
+  // Was missing entirely — review intel only ran on-demand before
+  cron.schedule('0 2 * * 0', async () => {
+    logger.info('[Cron] Review Intelligence weekly refresh');
+    await reviewIntelligenceService.runWeeklyRefresh()
+      .catch(e => logger.error('[Cron] Review intel failed', { error: e.message }));
+  }, { timezone: 'UTC' });
+
+  // Cleanup old snapshots + AI visibility data: Sunday 3am UTC
+  // GBP Guard creates 25+ snapshots/day per Agency customer
+  // Without cleanup this grows unbounded in Supabase
+  cron.schedule('0 3 * * 0', async () => {
+    logger.info('[Cron] Cleanup old snapshots and AI visibility data');
+    try {
+      const { supabase } = await import('./infrastructure/database/SupabaseClient.js');
+      await supabase.rpc('cleanup_old_snapshots');
+      await supabase.rpc('cleanup_old_ai_visibility');
+      logger.info('[Cron] Cleanup complete');
+    } catch (e: any) { logger.error('[Cron] Cleanup failed', { error: e.message }); }
   }, { timezone: 'UTC' });
 
   logger.info('[Cron] All jobs registered', {

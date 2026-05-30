@@ -25,6 +25,8 @@ const DFS_MAPS_LIVE       = '/serp/google/maps/live/advanced';
 const DFS_MAPS_TASK_POST  = '/serp/google/maps/task_post';
 const DFS_MAPS_TASK_GET   = '/serp/google/maps/task_get/advanced';
 const DFS_REVIEW_POST     = '/reviews/google/task_post';
+const DFS_PLACE_DETAILS_POST = '/business_data/google/my_business/info/task_post';
+const DFS_PLACE_DETAILS_GET  = '/business_data/google/my_business/info/task_get';
 const DFS_REVIEW_GET      = '/reviews/google/task_get/advanced';
 
 // Redis key prefix for pending Standard Queue task IDs
@@ -354,6 +356,102 @@ export class SerpApiService {
       return [];
     }
   }
+
+  /**
+   * Fetch full GBP place details for a given Place ID.
+   * Used by GBPGuardService to snapshot all 20 monitored fields daily.
+   * Uses Standard Queue — non-urgent, runs at 5am with the guard cron.
+   *
+   * Returns the full place data object or null if not found/failed.
+   * This method was MISSING before — causing GBP Guard to silently do nothing.
+   */
+  async fetchPlaceDetails(placeId: string): Promise<any | null> {
+    if (!this.isConfigured()) return null;
+
+    // Check Redis cache first (6h TTL — place details change slowly)
+    const cacheKey = `dfs:place:${placeId}`;
+    try {
+      const { redis } = await import('../../infrastructure/cache/RedisClient.js');
+      const cached = await redis.get(cacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch { /* cache miss */ }
+
+    try {
+      // Post Standard Queue task for place details
+      const body = JSON.stringify([{
+        place_id:      placeId,
+        language_code: 'en',
+        priority:      1,  // Standard Queue
+      }]);
+
+      const postRes = await fetch(`${DFS_BASE}${DFS_PLACE_DETAILS_POST}`, {
+        method: 'POST', headers: HEADERS(), body,
+      });
+
+      if (!postRes.ok) {
+        logger.debug('[DFS] Place details post failed', { status: postRes.status, placeId });
+        return null;
+      }
+
+      const postData = await postRes.json() as any;
+      const taskId   = postData?.tasks?.[0]?.id;
+      if (!taskId) return null;
+
+      // Poll up to 5 minutes (30s × 10 = 5min) for place details
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 30000));
+
+        const getRes = await fetch(`${DFS_BASE}${DFS_PLACE_DETAILS_GET}/${taskId}`, {
+          headers: HEADERS(),
+        });
+        if (!getRes.ok) continue;
+
+        const getData = await getRes.json() as any;
+        const task    = getData?.tasks?.[0];
+        if (!task || task.status_code === 20100) continue; // still queued
+        if (task.status_code !== 20000) break;             // error
+
+        const item = task?.result?.[0]?.items?.[0];
+        if (!item) return null;
+
+        // Map DataForSEO place details to our standard format
+        const placeData = {
+          name:                item.title ?? null,
+          address:             item.address ?? null,
+          phone:               item.phone ?? null,
+          website:             item.url ?? null,
+          description:         item.description ?? null,
+          latitude:            item.latitude ?? null,
+          longitude:           item.longitude ?? null,
+          store_code:          item.store_code ?? null,
+          opening_hours:       item.work_hours ?? null,
+          primary_category:    item.category ?? null,
+          secondary_categories: item.additional_categories ?? null,
+          rating:              item.rating?.value ?? null,
+          review_count:        item.rating?.votes_count ?? null,
+          is_permanently_closed: item.is_claimed === false ? false : (item.is_permanently_closed ?? false),
+          google_fid:          item.feature_id ?? null,
+          google_cid:          item.cid ?? null,
+        };
+
+        // Cache for 6 hours
+        try {
+          const { redis } = await import('../../infrastructure/cache/RedisClient.js');
+          await redis.setex(cacheKey, 60 * 60 * 6, JSON.stringify(placeData));
+        } catch { /* non-critical */ }
+
+        return placeData;
+      }
+
+      logger.debug('[DFS] Place details timed out', { placeId });
+      return null;
+
+    } catch (err: any) {
+      logger.error('[DFS] Place details error', { placeId, error: err.message });
+      return null;
+    }
+  }
+
 }
 
 // ── Cron collect pass — called from index.ts at 1:30am ────────

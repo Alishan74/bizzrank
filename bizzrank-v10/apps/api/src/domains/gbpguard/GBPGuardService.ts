@@ -24,6 +24,7 @@
 import { db } from '../../infrastructure/database/SupabaseClient.js';
 import { logger } from '../../infrastructure/logger/Logger.js';
 import { serpApiService } from '../serpapi/SerpApiService.js';
+import { eventBus, Events } from '../../infrastructure/events/EventBus.js';
 
 // ── The 20 monitored fields ──────────────────────────────────
 export const MONITORED_FIELDS = [
@@ -335,6 +336,37 @@ export class GBPGuardService {
     logger.info('[GBPGuard] Alerts generated', {
       entityId, entityName, isCompetitor, count: alerts.length,
     });
+
+    // Publish GBP_CHANGE_DETECTED for fields that affect citation consistency.
+    // Only fires for YOUR business (not competitors) and only for fields that
+    // directly impact how AI platforms find and cite you:
+    //   website  → Perplexity cites your website — old URL breaks citations
+    //   address  → All platforms use address for NAP consistency
+    //   name     → Name changes break citation matching across all platforms
+    //   phone    → Core NAP signal for local business data sources
+    //
+    // AICitationService subscribes to this event and schedules a re-check.
+    const citationTriggerFields = ['website', 'address', 'name', 'phone'];
+    const citationAlerts = alerts.filter(a =>
+      !isCompetitor && citationTriggerFields.includes(a.field_name)
+    );
+
+    if (citationAlerts.length > 0) {
+      eventBus.publish(Events.GBP_CHANGE_DETECTED, {
+        entityId,
+        userId,
+        entityName,
+        changedFields: citationAlerts.map(a => ({
+          field:    a.field_name,
+          oldValue: a.old_value,
+          newValue: a.new_value,
+        })),
+        detectedAt: new Date().toISOString(),
+      });
+      logger.info('[GBPGuard] Citation re-check triggered', {
+        entityId, fields: citationAlerts.map(a => a.field_name),
+      });
+    }
 
     return alerts.length;
   }

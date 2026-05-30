@@ -18,7 +18,15 @@ interface Insight {
   actionPath?: string;
 }
 
-function buildInsights(data: any, businesses: any[], latestScores: any[], signals: any[]): Insight[] {
+function buildInsights(
+  data:        any,
+  businesses:  any[],
+  latestScores: any[],
+  signals:     any[],
+): Insight[] {
+  // Also reads data.gbpGuard and data.aiVisibility directly
+  // These are included in the dashboard response and power
+  // the GBP Guard and AI Visibility insight cards
   const insights: Insight[] = [];
   const opp = data?.intelligence?.opportunity;
 
@@ -128,6 +136,128 @@ function buildInsights(data: any, businesses: any[], latestScores: any[], signal
         detail: `${biz.name} has ${Math.round(s.value)} unanswered reviews. Google uses response rate as a ranking signal.`,
         reason: 'Businesses that respond to reviews within 24 hours rank higher. Even a brief reply counts.',
         action: 'Respond now →', actionPath: '/reviews',
+      });
+    }
+  }
+
+  // ── AdPressureDelta signal — ad spend spike in your area ──────
+  // Previously: this signal was saved to intel_signals but never
+  // displayed anywhere. Customers had no idea when competitor ad
+  // spend spiked in their service area.
+  for (const s of signals.filter((x: any) => x.signal_type === 'AdPressureDelta').slice(0, 2)) {
+    const biz = businesses.find((b: any) => b.id === s.business_id) ?? { name: 'Your Business' };
+    insights.push({
+      id:           'sig-ad-' + s.id,
+      icon:         '📢',
+      type:         'alert',
+      businessName: biz.name,
+      keyword:      s.keyword ?? '',
+      headline:     `Competitor ad spend spiked ${Math.round(s.value)}% this week`,
+      detail:       `${biz.name}'s service area saw a ${Math.round(s.value)}% increase in Google Ads activity. Competitors are investing more in paid placements — your organic position matters more now.`,
+      reason:       'Ad pressure spikes mean competitors are paying to appear above organic results. Strong organic rankings are your defence — customers who scroll past ads trust organic results more.',
+      action:       'View ad pressure →',
+      actionPath:   '/ad-insights',
+    });
+  }
+
+  // ── GBP Guard alerts — critical profile changes ─────────────
+  // Previously: GBP Guard ran daily and detected changes, but
+  // customers only saw alerts if they navigated to /gbp-guard.
+  // Critical alerts (address changed, permanently closed) now
+  // surface directly in the Overview feed.
+  const gbp = data?.gbpGuard;
+  if (gbp?.criticalUnread > 0) {
+    const firstBiz = businesses[0] ?? { name: 'Your Business' };
+    insights.push({
+      id:           'gbp-critical',
+      icon:         '🚨',
+      type:         'alert',
+      businessName: firstBiz.name,
+      keyword:      '',
+      headline:     `${gbp.criticalUnread} critical GBP change${gbp.criticalUnread > 1 ? 's' : ''} detected`,
+      detail:       `Your Google Business Profile has ${gbp.criticalUnread} critical change${gbp.criticalUnread > 1 ? 's' : ''} that need immediate attention. This could be an unauthorized edit to your address, phone number, or category.`,
+      reason:       'Anyone can suggest edits to a Google Business Profile. Unauthorized changes to your address or category directly harm your local search rankings and can send customers to the wrong location.',
+      action:       'Review changes →',
+      actionPath:   '/gbp-guard',
+    });
+  } else if (gbp?.totalUnread > 0) {
+    const firstBiz = businesses[0] ?? { name: 'Your Business' };
+    insights.push({
+      id:           'gbp-unread',
+      icon:         '🛡️',
+      type:         'info',
+      businessName: firstBiz.name,
+      keyword:      '',
+      headline:     `${gbp.totalUnread} GBP update${gbp.totalUnread > 1 ? 's' : ''} detected`,
+      detail:       `${gbp.totalUnread} change${gbp.totalUnread > 1 ? 's were' : ' was'} detected on your Google Business Profile in the last 7 days. Review them to confirm they're authorised.`,
+      reason:       'Regular profile changes like hours updates are normal, but any change to your address, phone, or category should be verified.',
+      action:       'Review changes →',
+      actionPath:   '/gbp-guard',
+    });
+  }
+
+  // ── AI Visibility score — how you appear in AI searches ─────
+  // Previously: AI Visibility was tracked weekly but the score
+  // was completely invisible unless the customer visited /ai-visibility.
+  // Now surfaces as an insight when the score is low, declining,
+  // or when it's the first time a score exists (first check done).
+  const aiv = data?.aiVisibility;
+  if (aiv) {
+    const firstBiz = businesses[0] ?? { name: 'Your Business' };
+    const score    = aiv.overallScore ?? 0;
+    const disc     = aiv.discoveryScore ?? 0;
+
+    if (aiv.trend === 'improving' && (aiv.trendDelta ?? 0) >= 10) {
+      insights.push({
+        id:           'aiv-improving',
+        icon:         '🤖',
+        type:         'win',
+        businessName: firstBiz.name,
+        keyword:      '',
+        headline:     `AI visibility improving — up ${aiv.trendDelta} points`,
+        detail:       `${firstBiz.name}'s AI visibility score rose by ${aiv.trendDelta} points to ${score}/100. More customers asking ChatGPT, Gemini, or Perplexity for recommendations in your area are now finding you.`,
+        reason:       'AI visibility improves when your Foursquare/Yelp listings are complete, your GBP description contains location keywords, and your reviews mention your specific services.',
+        action:       'View AI visibility →',
+        actionPath:   '/ai-visibility',
+      });
+    } else if (score < 20) {
+      insights.push({
+        id:           'aiv-low',
+        icon:         '🤖',
+        type:         'alert',
+        businessName: firstBiz.name,
+        keyword:      '',
+        headline:     `Low AI visibility — appearing in ${score}% of AI searches`,
+        detail:       `When someone asks ChatGPT or Google AI "best ${firstBiz.name?.split(' ')[0] ?? 'business'} near me", ${firstBiz.name} appears in only ${score}% of AI recommendations. ${disc < 20 ? 'Your discovery score is ' + disc + '% — new customers rarely find you through AI.' : ''}`,
+        reason:       aiv.topInsight ?? 'AI platforms like ChatGPT use Foursquare as their primary local data source. Claiming your Foursquare listing is the highest-impact single action.',
+        action:       'Improve AI visibility →',
+        actionPath:   '/ai-visibility',
+      });
+    } else if (score < 50) {
+      insights.push({
+        id:           'aiv-medium',
+        icon:         '🤖',
+        type:         'tip',
+        businessName: firstBiz.name,
+        keyword:      '',
+        headline:     `AI visibility at ${score}% — room to grow`,
+        detail:       `${firstBiz.name} appears in ${score}% of AI recommendation queries. Discovery score: ${disc}% — this is the score that drives new customers who don't already know you.`,
+        reason:       aiv.topInsight ?? 'Strengthen your Foursquare, Yelp, and Healthgrades listings to improve AI recommendation rates across all platforms.',
+        action:       'View AI visibility →',
+        actionPath:   '/ai-visibility',
+      });
+    } else if (aiv.trend === 'declining') {
+      insights.push({
+        id:           'aiv-declining',
+        icon:         '🤖',
+        type:         'alert',
+        businessName: firstBiz.name,
+        keyword:      '',
+        headline:     `AI visibility declining — down ${Math.abs(aiv.trendDelta ?? 0)} points`,
+        detail:       `${firstBiz.name}'s AI visibility dropped from ${score + Math.abs(aiv.trendDelta ?? 0)} to ${score}/100. You're appearing in fewer AI searches than last week.`,
+        reason:       'AI visibility can decline when competitors improve their listings, when your review response rate drops, or when your GBP information becomes inconsistent.',
+        action:       'View AI visibility →',
+        actionPath:   '/ai-visibility',
       });
     }
   }

@@ -20,24 +20,43 @@ export class WeeklyScheduler {
 
   async runDailyL2Scans(): Promise<void> {
     logger.info('[Scheduler] Daily L2 start');
-    const { data: profiles } = await db.from('profiles').select('id, plan');
-    if (!profiles?.length) return;
+    // FIXED: paginate profiles — previously loaded ALL at once
+    // At 200 users this caused memory pressure and 1,200 simultaneous BullMQ jobs
+    const BATCH = 50;
+    let offset  = 0;
     let scanned = 0, skipped = 0;
-    for (const p of profiles) {
-      try {
-        const { data: bizs } = await db.from('businesses')
-          .select('id').eq('user_id', p.id).neq('is_active', false);
-        for (const b of (bizs ?? [])) {
-          const kws = await this.getKeywords(b.id);
-          if (!kws.length) { skipped++; continue; }
-          await intelligenceService.runDailyL2Scan(b.id, p.id, kws)
-            .catch(e => logger.error('[Scheduler] L2 fail', { bizId: b.id, error: e.message }));
-          scanned++;
+
+    while (true) {
+      const { data: profiles } = await db.from('profiles')
+        .select('id, plan')
+        .range(offset, offset + BATCH - 1);
+
+      if (!profiles?.length) break;
+
+      for (const p of profiles) {
+        try {
+          const { data: bizs } = await db.from('businesses')
+            .select('id').eq('user_id', p.id).neq('is_active', false);
+          for (const b of (bizs ?? [])) {
+            const kws = await this.getKeywords(b.id);
+            if (!kws.length) { skipped++; continue; }
+            await intelligenceService.runDailyL2Scan(b.id, p.id, kws)
+              .catch(e => logger.error('[Scheduler] L2 fail', { bizId: b.id, error: e.message }));
+            scanned++;
+            // 100ms stagger between businesses to avoid BullMQ queue spike
+            await new Promise(r => setTimeout(r, 100));
+          }
+        } catch (e: any) {
+          logger.error('[Scheduler] Profile L2 fail', { profileId: p.id, error: e.message });
         }
-      } catch (e: any) {
-        logger.error('[Scheduler] Profile L2 fail', { profileId: p.id, error: e.message });
       }
+
+      if (profiles.length < BATCH) break;
+      offset += BATCH;
+      // 500ms pause between batches to avoid overwhelming DB
+      await new Promise(r => setTimeout(r, 500));
     }
+
     logger.info('[Scheduler] Daily L2 done', { scanned, skipped });
   }
 
@@ -96,8 +115,9 @@ export class WeeklyScheduler {
         for (const b of (bizs ?? [])) {
           await aiVisibilityService.runWeeklyCheck(b.id, p.id)
             .catch(e => logger.error('[Scheduler] AI Visibility failed', { bizId: b.id, error: e.message }));
-          // Stagger checks to avoid API rate limits
-          await new Promise(r => setTimeout(r, 2000));
+          // Stagger 5s between businesses to respect AI API rate limits
+          // Previously 2s — not enough for high user counts
+          await new Promise(r => setTimeout(r, 5000));
           checked++;
         }
       } catch (e: any) {

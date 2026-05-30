@@ -19,6 +19,11 @@ export interface ReviewContext {
   businessName: string;
   brandVoice: BrandVoice;
   existingReplies?: string[];
+  // Negative themes from ReviewIntelligenceService — injected into
+  // Gemini prompt for negative/neutral reviews so replies acknowledge
+  // known recurring issues rather than ignoring them.
+  // Example: ["Slow service", "Long wait times", "Parking issues"]
+  knownIssues?: string[];
 }
 
 const TONE_GUIDE: Record<string, string> = {
@@ -44,11 +49,20 @@ export async function generateReviewReply(ctx: ReviewContext): Promise<string> {
     ? `3-star NEUTRAL review. Acknowledge what went well, address what could be better.`
     : `${rating}-star POSITIVE review. Respond warmly and specifically — reference something from their actual review.`;
 
+  // Inject known recurring issues for negative/neutral reviews only.
+  // For positive reviews this context is irrelevant and would make replies odd.
+  // knownIssues comes from ReviewIntelligenceService.getCached() — zero extra cost.
+  const issuesContext = (ctx.knownIssues?.length && rating <= 3)
+    ? `\nKNOWN RECURRING ISSUES customers mention: ${ctx.knownIssues.slice(0, 3).join(', ')}.`
+      + `\nIf this review mentions any of these, acknowledge them specifically and show awareness that you're working to improve. Don't be defensive.`
+    : '';
+
   const prompt = `You are ${brandVoice.ownerName ?? 'the business owner'} of "${businessName}".
 Tone: ${TONE_GUIDE[brandVoice.tone] ?? TONE_GUIDE.friendly}
 ${brandVoice.emphasize ? `Always emphasize: ${brandVoice.emphasize}` : ''}
 ${brandVoice.avoid ? `Always avoid: ${brandVoice.avoid}` : ''}
 ${brandVoice.exampleReply ? `Learn style from this example (do NOT copy): "${brandVoice.exampleReply}"` : ''}
+${issuesContext}
 
 ${ratingGuidance}
 
@@ -65,14 +79,22 @@ Write ONE reply only. No quotes. No preamble. Just the reply text.`;
 }
 
 export async function generateBatchReplies(
-  reviews: Array<{ id: string; reviewerName: string; rating: number; reviewText: string }>,
+  reviews: Array<{ id: string; reviewerName: string; rating: number; reviewText: string; knownIssues?: string[] }>,
   businessName: string,
   brandVoice: BrandVoice
 ): Promise<Array<{ reviewId: string; reply: string; error?: string }>> {
   const results = [];
   for (const review of reviews) {
     try {
-      const reply = await generateReviewReply({ reviewerName: review.reviewerName, rating: review.rating, reviewText: review.reviewText, businessName, brandVoice });
+      // Pass knownIssues through from ReviewService → ReviewContext → Gemini prompt
+      const reply = await generateReviewReply({
+        reviewerName: review.reviewerName,
+        rating:       review.rating,
+        reviewText:   review.reviewText,
+        businessName,
+        brandVoice,
+        knownIssues:  review.knownIssues,
+      });
       results.push({ reviewId: review.id, reply });
       await new Promise(r => setTimeout(r, 600));
     } catch (err: any) {

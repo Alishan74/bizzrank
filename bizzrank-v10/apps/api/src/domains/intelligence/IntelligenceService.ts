@@ -79,18 +79,21 @@ export class IntelligenceService {
 
         if (!scan) continue;
 
+        // Read previous scores BEFORE enqueueing the new scan
+        // so the comparison is baseline-vs-baseline, not baseline-vs-queued
+        // (The enqueued scan is async — comparing after enqueue always
+        //  reads the same 2 previous scores since the new scan hasn't run)
+        const { data: prev } = await db.from('organic_scores')
+          .select('organic_visibility_score')
+          .eq('business_id', businessId).eq('user_id', userId)
+          .order('scanned_at', { ascending: false }).limit(2);
+
         await enqueueOrganicScan({
           scanId: scan.id, userId, businessId,
           clientGooglePlaceId: biz.google_place_id,
           competitors: (comps ?? []).map(c => ({ id: c.id, name: c.name, googlePlaceId: c.google_place_id })),
           keyword, points, radiusKm: 5, isAutomated: true,
         });
-
-        // Compare scores to previous — detect visibility changes
-        const { data: prev } = await db.from('organic_scores')
-          .select('organic_visibility_score')
-          .eq('business_id', businessId).eq('user_id', userId)
-          .order('scanned_at', { ascending: false }).limit(2);
 
         if (prev && prev.length >= 2) {
           const delta = (prev[0].organic_visibility_score ?? 0) - (prev[1].organic_visibility_score ?? 0);

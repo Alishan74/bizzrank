@@ -42,4 +42,8 @@ export const Events = {
   REVIEW_FETCHED:         'review.fetched',
   LEADERBOARD_COMPUTED:   'leaderboard.computed',
   CREDITS_DEDUCTED:       'billing.credits.deducted',
+  // Fired by GBPGuardService when critical/warning fields change.
+  // AICitationService subscribes to trigger a citation re-check
+  // when website, address, name, or phone changes are detected.
+  GBP_CHANGE_DETECTED:    'gbp.change.detected',
 } as const;

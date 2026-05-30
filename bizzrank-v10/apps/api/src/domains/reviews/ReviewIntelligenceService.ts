@@ -190,6 +190,39 @@ Rules:
   }
 
   /**
+   * Get cached negative theme names for a business — used by ReviewService
+   * to inject known issues into Gemini reply prompts.
+   *
+   * Returns ONLY the theme names (e.g. ["Slow service", "Long wait"])
+   * from the most recent cached review intelligence.
+   *
+   * Zero Gemini API calls — reads from the review_intelligence DB table.
+   * Called by ReviewService.runBatchGeneration() before generating replies.
+   */
+  async getCachedThemes(businessId: string): Promise<string[]> {
+    try {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+      const { data } = await db.from('review_intelligence')
+        .select('negative_themes')
+        .eq('business_id', businessId)
+        .gte('generated_at', sevenDaysAgo)
+        .order('generated_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (!data?.negative_themes?.length) return [];
+
+      // Return theme names only — strip example quotes and counts
+      return (data.negative_themes as Array<{ theme: string }>)
+        .map(t => t.theme)
+        .filter(Boolean)
+        .slice(0, 5);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Weekly refresh for all businesses with enough reviews.
    * Called by cron on Sunday 02:00 UTC.
    */

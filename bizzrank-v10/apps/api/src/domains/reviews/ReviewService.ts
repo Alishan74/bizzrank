@@ -13,6 +13,7 @@ import { eventBus, Events } from '../../infrastructure/events/EventBus.js';
 import { logger } from '../../infrastructure/logger/Logger.js';
 import { serpApiService } from '../serpapi/SerpApiService.js';
 import { generateReviewReply, generateBatchReplies, estimateRevenueLost } from './GeminiService.js';
+import { reviewIntelligenceService } from './ReviewIntelligenceService.js';
 import type { ReviewSyncJob } from '../../shared/types/contracts.js';
 
 export class ReviewService {
@@ -131,15 +132,29 @@ export class ReviewService {
       .select('name, brand_voice').eq('id', businessId).single();
     const brandVoice = biz?.brand_voice ?? { tone: 'friendly' };
 
-    this.runBatchGeneration(reviews, biz?.name ?? 'our business', brandVoice).catch(console.error);
+    this.runBatchGeneration(reviews, biz?.name ?? 'our business', brandVoice, businessId).catch(console.error);
     return { count: reviews.length };
   }
 
-  private async runBatchGeneration(reviews: any[], businessName: string, brandVoice: any) {
+  private async runBatchGeneration(reviews: any[], businessName: string, brandVoice: any, businessId?: string) {
+    // Load cached review intelligence to extract known negative themes.
+    // getCached() reads from the review_intelligence DB table — zero Gemini API calls.
+    // This is the connection: ReviewIntelligence → ReviewReplies.
+    // Themes are only injected for negative/neutral reviews (rating <= 3) — see GeminiService.
+    let knownIssues: string[] = [];
+    if (businessId) {
+      try {
+        const intel = await reviewIntelligenceService.getCachedThemes(businessId);
+        knownIssues = intel ?? [];
+      } catch { /* non-critical — reply generation continues without themes */ }
+    }
+
     const results = await generateBatchReplies(
       reviews.map(r => ({
         id: r.id, reviewerName: r.reviewer_name ?? 'there',
         rating: r.rating, reviewText: r.review_text ?? '',
+        // knownIssues injected here — passed through to GeminiService.generateReviewReply()
+        knownIssues,
       })),
       businessName, brandVoice,
     );

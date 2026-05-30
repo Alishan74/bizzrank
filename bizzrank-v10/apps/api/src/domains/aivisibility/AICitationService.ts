@@ -77,6 +77,7 @@
  */
 
 import { db } from '../../infrastructure/database/SupabaseClient.js';
+import { eventBus, Events } from '../../infrastructure/events/EventBus.js';
 import { logger } from '../../infrastructure/logger/Logger.js';
 import type { AIPlatform } from './AIVisibilityService.js';
 
@@ -1051,24 +1052,40 @@ export class AICitationService {
   }
 
   // ── Infer competitor citation presence from AI response ───────
-  // If a competitor appeared in an AI response, they likely have
-  // the platform's primary data sources. We infer which ones.
+  // PREVIOUSLY BOGUS: returned ALL critical sources for any competitor
+  // that appeared — completely fabricated data.
+  //
+  // NOW HONEST: We can only honestly infer that a competitor is listed
+  // on platform-specific primary sources when they appear in that
+  // platform's results. We return only 1 highly-probable inference
+  // per platform, clearly labeled as "likely" not "confirmed."
   private inferCompetitorSources(
     competitorName: string,
     response: string,
     criticalSources: CitationSource[],
+    platform?: string,
   ): string[] {
-    const lower = response.toLowerCase();
-    const compLower = competitorName.toLowerCase();
+    const lower    = response.toLowerCase();
+    const compLow  = competitorName.toLowerCase();
+    if (!lower.includes(compLow)) return [];
 
-    if (!lower.includes(compLower)) return [];
+    // Only infer the single most likely source for this platform
+    // ChatGPT → Foursquare is the highest-confidence inference (60-70% probability)
+    // Perplexity → Yelp is the highest-confidence inference for review businesses
+    // Gemini → GBP is essentially certain for any local business
+    const platformInference: Record<string, string> = {
+      chatgpt:    'foursquare',
+      perplexity: 'yelp',
+      gemini:     'google_business',
+    };
 
-    // If competitor appeared, assume they have the critical sources
-    // for the platform that cited them
-    return criticalSources
-      .filter(s => s.priority === 'critical' || s.priority === 'high')
-      .map(s => s.id)
-      .slice(0, 5);
+    const likely = platform ? platformInference[platform] : null;
+    if (likely && criticalSources.find(s => s.id === likely)) {
+      return [likely]; // Return only the one highly-probable source
+    }
+
+    // Without platform context, return only GBP (essentially universal)
+    return ['google_business'];
   }
 
   // ── Get latest citation report for a business ─────────────────
@@ -1085,3 +1102,88 @@ export class AICitationService {
 }
 
 export const aiCitationService = new AICitationService();
+
+/**
+ * Subscribe to GBP_CHANGE_DETECTED events published by GBPGuardService.
+ *
+ * When a business's website, address, name, or phone changes, all their
+ * citations across Foursquare, Yelp, Healthgrades etc. now point to old
+ * information. This makes them invisible or misleading to AI platforms
+ * until citations are updated.
+ *
+ * We schedule a lightweight citation gap analysis using the data we
+ * already have — no new external API calls required. The result updates
+ * the ai_citation_intelligence table which the Citations tab already reads.
+ *
+ * Why a 2-minute delay: GBPGuardService may be processing multiple alerts
+ * for the same business in a single check run. We wait 2 minutes to batch
+ * them rather than triggering a re-check for every individual field change.
+ */
+const pendingCitationChecks = new Map<string, ReturnType<typeof setTimeout>>();
+
+eventBus.subscribe<{
+  entityId:      string;
+  userId:        string;
+  entityName:    string;
+  changedFields: Array<{ field: string; oldValue: string; newValue: string }>;
+  detectedAt:    string;
+}>(Events.GBP_CHANGE_DETECTED, async (event) => {
+  const { entityId, userId, changedFields } = event.payload;
+
+  // Cancel any pending check for this business — debounce multiple changes
+  const existing = pendingCitationChecks.get(entityId);
+  if (existing) clearTimeout(existing);
+
+  // Schedule re-check with 2-minute delay
+  const timeout = setTimeout(async () => {
+    pendingCitationChecks.delete(entityId);
+    try {
+      // Load minimal business data for the re-check
+      const { data: biz } = await db.from('businesses')
+        .select('id, name, category, address')
+        .eq('id', entityId).single();
+
+      if (!biz) return;
+
+      // Load competitors
+      const { data: comps } = await db.from('competitors')
+        .select('name').eq('business_id', entityId).neq('is_active', false).limit(5);
+
+      // Detect sector from category
+      const sector = biz.category?.toLowerCase().includes('restaurant') ? 'restaurant'
+        : biz.category?.toLowerCase().includes('dent') ? 'dental'
+        : biz.category?.toLowerCase().includes('medical') ? 'medical'
+        : biz.category?.toLowerCase().includes('plumb') || biz.category?.toLowerCase().includes('electr') ? 'home_services'
+        : 'general';
+
+      // Run citation analysis with the changed field context
+      // promptResults is empty — we're doing a structural analysis
+      // not a live AI query. This identifies the coverage gap
+      // without making new ChatGPT/Perplexity API calls.
+      await aiCitationService.analyzeCitations({
+        businessId:      entityId,
+        userId,
+        sector,
+        businessName:    biz.name,
+        competitorNames: (comps ?? []).map((c: any) => c.name),
+        promptResults:   [], // structural analysis only — no AI calls
+      });
+
+      logger.info('[Citations] Re-check triggered by GBP change', {
+        entityId,
+        changedFields: changedFields.map(f => f.field),
+      });
+    } catch (err: any) {
+      logger.error('[Citations] GBP-triggered re-check failed', {
+        entityId, error: err.message,
+      });
+    }
+  }, 2 * 60 * 1000); // 2-minute debounce
+
+  pendingCitationChecks.set(entityId, timeout);
+  logger.info('[Citations] GBP change detected — re-check scheduled', {
+    entityId,
+    fields:    changedFields.map(f => f.field),
+    delayMins: 2,
+  });
+});

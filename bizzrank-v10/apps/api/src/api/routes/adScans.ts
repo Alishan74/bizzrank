@@ -91,7 +91,9 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: 'All scheduled times have already passed for today. Try again tomorrow or set custom hours.' });
   }
 
-  const totalSlots = validTimes.length * businesses.length;
+  // Each slot = 1 full 25-point grid scan = 25 credits (matches organic scan credit cost)
+  const slotsCount = validTimes.length * businesses.length;
+  const totalSlots = slotsCount * 25;
 
   if (profile.credits_balance < totalSlots) {
     return res.status(402).json({
@@ -101,7 +103,8 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
     });
   }
 
-  // Create session
+  // Create session FIRST — then deduct credits
+  // If session insert fails, no credits are lost (was previously reversed)
   const { data: session, error } = await supabase.from('ad_scan_sessions').insert({
     user_id: req.userId, keyword,
     targeting_method: method,
@@ -120,11 +123,11 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
 
-  // Deduct credits
+  // Deduct credits AFTER session is confirmed created
   await supabase.from('profiles').update({ credits_balance: profile.credits_balance - totalSlots }).eq('id', req.userId!);
   await supabase.from('credit_transactions').insert({
     user_id: req.userId, amount: -totalSlots, balance_after: profile.credits_balance - totalSlots,
-    reason: 'Ad scan: ' + keyword + ' (' + validTimes.length + ' slots x ' + businesses.length + ' biz)',
+    reason: 'Ad scan: ' + keyword + ' (' + slotsCount + ' slots × 25 pts)',
     transaction_type: 'usage',
   });
 

@@ -8,13 +8,59 @@ api.interceptors.request.use(config => {
   return config;
 });
 
+// Track if we're already refreshing to avoid infinite loops
+let isRefreshing = false;
+let refreshQueue: Array<(token: string) => void> = [];
+
 api.interceptors.response.use(
   response => response,
-  error => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      window.location.href = '/login';
+  async error => {
+    const originalRequest = error.config;
+
+    // 401 + not already retried + not the refresh endpoint itself
+    if (
+      error.response?.status === 401 &&
+      !originalRequest._retry &&
+      !originalRequest.url?.includes('/auth/refresh') &&
+      !originalRequest.url?.includes('/auth/login')
+    ) {
+      originalRequest._retry = true;
+
+      if (isRefreshing) {
+        // Queue this request until refresh completes
+        return new Promise(resolve => {
+          refreshQueue.push((token: string) => {
+            originalRequest.headers.Authorization = 'Bearer ' + token;
+            resolve(api(originalRequest));
+          });
+        });
+      }
+
+      isRefreshing = true;
+
+      try {
+        const { data } = await api.post('/auth/refresh');
+        const newToken = data.token;
+        localStorage.setItem('token', newToken);
+        api.defaults.headers.common['Authorization'] = 'Bearer ' + newToken;
+        originalRequest.headers.Authorization = 'Bearer ' + newToken;
+
+        // Flush queued requests
+        refreshQueue.forEach(cb => cb(newToken));
+        refreshQueue = [];
+
+        return api(originalRequest);
+      } catch {
+        // Refresh failed — session truly expired, force logout
+        localStorage.removeItem('token');
+        refreshQueue = [];
+        window.location.href = '/login?expired=1';
+        return Promise.reject(error);
+      } finally {
+        isRefreshing = false;
+      }
     }
+
     return Promise.reject(error);
   }
 );
@@ -23,6 +69,7 @@ export const authApi = {
   signup: (d: any) => api.post('/auth/signup', d),
   login: (d: any) => api.post('/auth/login', d),
   me: () => api.get('/auth/me'),
+  refresh: () => api.post('/auth/refresh'),
   gbpConnect: () => api.get('/auth/gbp/connect'),
   gbpLocations: () => api.get('/auth/gbp/locations'),
 };
@@ -140,7 +187,10 @@ export const gbpGuardApi = {
 };
 
 export const aiVisibilityApi = {
-  status:    (businessId: string) => api.get('/ai-visibility/status?businessId=' + businessId),
-  platforms: ()                   => api.get('/ai-visibility/platforms'),
-  check:     (businessId: string) => api.post('/ai-visibility/check', { businessId }),
+  status:          (businessId: string) => api.get('/ai-visibility/status?businessId=' + businessId),
+  platforms:       ()                   => api.get('/ai-visibility/platforms'),
+  check:           (businessId: string) => api.post('/ai-visibility/check', { businessId }),
+  // These were MISSING — CitationsTab.tsx was throwing "is not a function"
+  citations:       (businessId: string) => api.get('/ai-visibility/citations?businessId=' + businessId),
+  citationSources: (sector: string)     => api.get('/ai-visibility/citation-sources?sector=' + sector),
 };

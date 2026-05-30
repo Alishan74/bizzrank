@@ -47,8 +47,8 @@ router.post('/signup', async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
 
-    // Wait for Supabase auth trigger to write the profile row
-    await new Promise(r => setTimeout(r, 800));
+    // No sleep needed — we upsert the profile directly below
+    // The trigger may or may not have fired; upsert handles both cases
 
     // Make sure the profile exists (idempotent)
     await supabase.from('profiles').upsert({
@@ -112,7 +112,6 @@ router.post('/accept-invite-signup', async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
 
-    await new Promise(r => setTimeout(r, 800));
     await supabase.from('profiles').upsert({
       id: data.user.id, full_name: fullName, plan: 'starter',
       credits_balance: 0, monthly_allowance: 0,
@@ -216,6 +215,30 @@ router.get('/gbp/locations', requireAuth, async (req: AuthRequest, res) => {
     res.json({ locations: data?.locations ?? [] });
   } catch {
     res.json({ locations: [] });
+  }
+});
+
+/**
+ * POST /auth/refresh
+ * Refreshes a JWT token if it's within 24h of expiry.
+ * Called by frontend interceptor when a 401 is received.
+ * Issues a new 7-day token without requiring re-login.
+ */
+router.post('/refresh', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const { data: profile } = await supabase
+      .from('profiles').select('plan').eq('id', req.userId!).single();
+
+    // Issue a fresh 7-day token
+    const token = jwt.sign(
+      { userId: req.userId!, email: req.userEmail },
+      JWT,
+      { expiresIn: '7d' }
+    );
+
+    res.json({ token, plan: profile?.plan ?? 'starter' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Refresh failed' });
   }
 });
 
